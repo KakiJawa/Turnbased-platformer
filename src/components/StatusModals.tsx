@@ -1,4 +1,4 @@
-import { Crown, Flame, RotateCcw, Skull, Sparkles } from 'lucide-react';
+import { ArrowRight, Compass, Crown, Flame, RotateCcw, Skull, Sparkles } from 'lucide-react';
 import { MATERIAL_META } from '../game/data';
 import { RARITY_META } from '../game/palette';
 import { EquipmentItem, MaterialId, PlayerState } from '../game/types';
@@ -15,14 +15,21 @@ export interface VictoryRecapData {
   levelsGained: number;
   maxComboCount: number;
   maxComboDamage: number;
+  voidTowerFloor?: number;
+  nextVoidTowerFloor?: number;
 }
 
 interface BattleVictoryModalProps {
   recap: VictoryRecapData;
   onContinue: () => void;
+  onContinueVoidTower?: (nextFloor: number) => void;
 }
 
-export function BattleVictoryModal({ recap, onContinue }: BattleVictoryModalProps) {
+export function BattleVictoryModal({
+  recap,
+  onContinue,
+  onContinueVoidTower,
+}: BattleVictoryModalProps) {
   const matEntries = (Object.entries(recap.materials) as [MaterialId, number][]).filter(
     ([, amt]) => amt > 0
   );
@@ -112,14 +119,27 @@ export function BattleVictoryModal({ recap, onContinue }: BattleVictoryModalProp
           </div>
         )}
 
-        <button
-          type="button"
-          data-testid="victory-continue"
-          onClick={onContinue}
-          className="w-full font-pixel text-xs py-2.5 bg-[#f7c948] text-[#0e0b16] border-2 border-[#0e0b16] shadow-[0_3px_0_#0e0b16] hover:bg-[#fde047] cursor-pointer"
-        >
-          CONTINUE [SPACE / ENTER]
-        </button>
+        <div className="flex flex-col sm:flex-row gap-2">
+          {recap.nextVoidTowerFloor && onContinueVoidTower && (
+            <button
+              type="button"
+              data-testid="victory-push-tower"
+              onClick={() => onContinueVoidTower(recap.nextVoidTowerFloor!)}
+              className="flex-1 flex items-center justify-center gap-1.5 font-pixel text-xs py-2.5 bg-[#c084fc] text-[#0e0b16] border-2 border-[#0e0b16] shadow-[0_3px_0_#0e0b16] hover:bg-[#d8b4fe] cursor-pointer"
+            >
+              <span>Push Floor {recap.nextVoidTowerFloor}</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          )}
+          <button
+            type="button"
+            data-testid="victory-continue"
+            onClick={onContinue}
+            className="flex-1 font-pixel text-xs py-2.5 bg-[#f7c948] text-[#0e0b16] border-2 border-[#0e0b16] shadow-[0_3px_0_#0e0b16] hover:bg-[#fde047] cursor-pointer"
+          >
+            {recap.nextVoidTowerFloor ? 'Return to Camp' : 'CONTINUE [SPACE / ENTER]'}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -170,13 +190,23 @@ interface OutcomeModalProps {
   player: PlayerState;
   zone: number;
   onRestart: () => void;
+  onContinuePostgame?: () => void;
+  onEnterVoidTower?: () => void;
 }
 
-export function OutcomeModal({ kind, player, zone, onRestart }: OutcomeModalProps) {
+export function OutcomeModal({
+  kind,
+  player,
+  zone,
+  onRestart,
+  onContinuePostgame,
+  onEnterVoidTower,
+}: OutcomeModalProps) {
   const isVictory = kind === 'victory';
   return (
     <div className="fixed inset-0 z-40 bg-black/80 flex items-center justify-center p-4">
       <div
+        data-testid={isVictory ? 'outcome-victory-modal' : 'outcome-gameover-modal'}
         className={`bg-[#1b162b] border-4 shadow-[0_8px_0_#0e0b16] p-6 w-full max-w-md text-center ${
           isVictory ? 'border-[#f7c948]' : 'border-[#ef4444]'
         }`}
@@ -198,7 +228,7 @@ export function OutcomeModal({ kind, player, zone, onRestart }: OutcomeModalProp
         </h2>
         <p className="text-xs text-[#cbd5e1] mb-4">
           {isVictory
-            ? 'You rose from a humble Villager, vanquished Ignis, and shattered Architect Malakor atop The Void Spire!'
+            ? 'You vanquished Architect Malakor! Your save, gear, skills, and Pet Familiar remain intact, and the Endless Void Tower is now open.'
             : 'Your journey ended in the field, but your legend awaits another try.'}
         </p>
 
@@ -221,15 +251,51 @@ export function OutcomeModal({ kind, player, zone, onRestart }: OutcomeModalProp
           </div>
         </div>
 
-        <button
-          type="button"
-          data-start="true"
-          onClick={onRestart}
-          className="w-full flex items-center justify-center gap-2 font-pixel text-sm py-3 bg-[#f7c948] text-[#0e0b16] border-2 border-[#0e0b16] shadow-[0_4px_0_#0e0b16] hover:bg-[#fde047] cursor-pointer"
-        >
-          <RotateCcw className="w-4 h-4" />
-          <span>{isVictory ? 'Play Again' : 'Try Again'}</span>
-        </button>
+        {isVictory ? (
+          <div className="flex flex-col gap-2.5">
+            {onEnterVoidTower && (
+              <button
+                type="button"
+                data-testid="victory-enter-tower"
+                onClick={onEnterVoidTower}
+                className="w-full flex items-center justify-center gap-2 font-pixel text-xs sm:text-sm py-3 bg-[#c084fc] text-[#0e0b16] border-2 border-[#0e0b16] shadow-[0_4px_0_#0e0b16] hover:bg-[#d8b4fe] cursor-pointer"
+              >
+                <Crown className="w-4 h-4" />
+                <span>Enter Endless Void Tower (Floor 1)</span>
+              </button>
+            )}
+            {onContinuePostgame && (
+              <button
+                type="button"
+                data-testid="victory-keep-exploring"
+                onClick={onContinuePostgame}
+                className="w-full flex items-center justify-center gap-2 font-pixel text-xs py-2.5 bg-[#f7c948] text-[#0e0b16] border-2 border-[#0e0b16] shadow-[0_4px_0_#0e0b16] hover:bg-[#fde047] cursor-pointer"
+              >
+                <Compass className="w-4 h-4" />
+                <span>Keep Exploring (Wayside Camp)</span>
+              </button>
+            )}
+            <button
+              type="button"
+              data-testid="victory-new-run"
+              onClick={onRestart}
+              className="w-full flex items-center justify-center gap-2 font-pixel text-[11px] py-2 bg-[#0e0b16] text-[#cbd5e1] border-2 border-[#4b3f6b] hover:border-[#ef4444] hover:text-[#fca5a5] cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Start Fresh Lv.1 Run (Resets Save)</span>
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            data-start="true"
+            onClick={onRestart}
+            className="w-full flex items-center justify-center gap-2 font-pixel text-sm py-3 bg-[#f7c948] text-[#0e0b16] border-2 border-[#0e0b16] shadow-[0_4px_0_#0e0b16] hover:bg-[#fde047] cursor-pointer"
+          >
+            <RotateCcw className="w-4 h-4" />
+            <span>Try Again</span>
+          </button>
+        )}
       </div>
     </div>
   );

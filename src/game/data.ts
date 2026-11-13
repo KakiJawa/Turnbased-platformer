@@ -11,6 +11,7 @@ import {
   Stats,
   Tier3SpecializationId,
   Tier3SpecializationMeta,
+  VoidTowerMutator,
 } from './types';
 
 export const STAT_LABELS: Record<StatKey, string> = {
@@ -180,6 +181,45 @@ export const ARENA_TRIALS: ArenaTrialDefinition[] = [
     bonusXp: 7500,
     guaranteedRarity: 'mythic',
     rewardZoneLevel: 10,
+  },
+];
+
+export const VOID_TOWER_MUTATORS: VoidTowerMutator[] = [
+  {
+    id: 'abyssal_fury',
+    name: 'Abyssal Fury',
+    description: 'Tower foes start with +25% ATK/MATK & +20% SPD.',
+    accent: '#fb7185',
+  },
+  {
+    id: 'mirror_rift',
+    name: 'Mirror Rift',
+    description: 'Every floor spawns an extra Rift Stalker phantom flanker.',
+    accent: '#c084fc',
+  },
+  {
+    id: 'void_barrier',
+    name: 'Void Bastion',
+    description: 'Primary enemy begins battle protected by a 2-hit 50% Barrier.',
+    accent: '#facc15',
+  },
+  {
+    id: 'astral_overdrive',
+    name: 'Astral Surge',
+    description: 'Hero starts at 3x Combo and deals +25% Crit DMG.',
+    accent: '#38bdf8',
+  },
+  {
+    id: 'null_static',
+    name: 'Null Static',
+    description: 'Foes charge +40% extra Ultimate meter per attack.',
+    accent: '#f43f5e',
+  },
+  {
+    id: 'fractured_space',
+    name: 'Fractured Space',
+    description: 'Hero deals +35% Stagger DMG; enemies have +20% Max HP.',
+    accent: '#4ade80',
   },
 ];
 

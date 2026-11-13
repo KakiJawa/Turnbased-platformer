@@ -40,6 +40,7 @@ import {
   getSavedRunSummary,
   loadRunState,
   saveRunState,
+  ZoneEntityProgress,
 } from './game/persistence';
 import {
   PlatformerPlayer,
@@ -56,6 +57,7 @@ import {
   enchantEquipment,
   equipPetFamiliar,
   generateEquipment,
+  getVoidTowerMutator,
   grantXp,
   loadSkillPreset,
   reforgeEquipment,
@@ -64,7 +66,9 @@ import {
   saveSkillPreset,
   spawnArenaBossWave,
   spawnEnemyWave,
+  spawnVoidTowerWave,
   toggleEquipSkill,
+  toggleEquipmentLock,
   unlockSkillNode,
 } from './game/rpgLogic';
 import { buildStage } from './game/stages';
@@ -79,6 +83,42 @@ import {
 import { VfxManager } from './game/vfx';
 import { WeatherSystem } from './game/weather';
 
+function snapshotStageProgress(stage: StageDefinition): ZoneEntityProgress {
+  return {
+    defeatedEntityIds: stage.entities
+      .filter((e) => e.kind === 'enemy' && e.defeated)
+      .map((e) => e.id),
+    openedChestIds: stage.entities
+      .filter((e) => e.kind === 'chest' && e.opened)
+      .map((e) => e.id),
+    collectedPickupIds: stage.entities
+      .filter((e) => (e.kind === 'gold' || e.kind === 'material') && e.collected)
+      .map((e) => e.id),
+    usedShrineIds: stage.entities
+      .filter((e) => e.kind === 'shrine' && e.used)
+      .map((e) => e.id),
+  };
+}
+
+function applyZoneProgressToStage(
+  stage: StageDefinition,
+  prog?: ZoneEntityProgress
+): void {
+  if (!prog) return;
+  const defeatedSet = new Set(prog.defeatedEntityIds);
+  const openedSet = new Set(prog.openedChestIds);
+  const collectedSet = new Set(prog.collectedPickupIds);
+  const shrineSet = new Set(prog.usedShrineIds);
+  for (const ent of stage.entities) {
+    if (ent.kind === 'enemy' && defeatedSet.has(ent.id)) ent.defeated = true;
+    if (ent.kind === 'chest' && openedSet.has(ent.id)) ent.opened = true;
+    if ((ent.kind === 'gold' || ent.kind === 'material') && collectedSet.has(ent.id)) {
+      ent.collected = true;
+    }
+    if (ent.kind === 'shrine' && shrineSet.has(ent.id)) ent.used = true;
+  }
+}
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -86,12 +126,19 @@ export default function App() {
   const modeRef = useRef<GameMode>('title');
   const playerRef = useRef<PlayerState>(createInitialPlayer());
   const stageRef = useRef<StageDefinition>(buildStage(1));
+  const zoneProgressRef = useRef<Record<number, ZoneEntityProgress>>({});
   const pPlayerRef = useRef<PlatformerPlayer>(createPlatformerPlayer());
   const battleRef = useRef<BattleState | null>(null);
   const vfxRef = useRef<VfxManager>(new VfxManager());
   const weatherRef = useRef<WeatherSystem>(new WeatherSystem());
   const encounterRef = useRef<EncounterTransitionState>(createEncounterTransition());
   const nearbyRef = useRef<WorldEntity | null>(null);
+  const nearBouncePadRef = useRef<WorldEntity | null>(null);
+  const touchDirRef = useRef<-1 | 0 | 1>(0);
+  const gamepadPrevRef = useRef<{ jump: boolean; interact: boolean }>({
+    jump: false,
+    interact: false,
+  });
   const keysHeldRef = useRef<Set<string>>(new Set());
   const jumpJustPressedRef = useRef<boolean>(false);
   const activeModalRef = useRef<'none' | 'inventory' | 'skills' | 'town'>('none');
@@ -118,21 +165,19 @@ export default function App() {
 
   const persistCurrentRun = useCallback(() => {
     const stage = stageRef.current;
+    const snap = snapshotStageProgress(stage);
+    zoneProgressRef.current[stage.zone] = snap;
     saveRunState({
       version: 1,
       savedAt: Date.now(),
       player: playerRef.current,
       zone: stage.zone,
       playerX: Math.round(pPlayerRef.current.x),
-      defeatedEntityIds: stage.entities
-        .filter((e) => e.kind === 'enemy' && e.defeated)
-        .map((e) => e.id),
-      openedChestIds: stage.entities
-        .filter((e) => e.kind === 'chest' && e.opened)
-        .map((e) => e.id),
-      collectedPickupIds: stage.entities
-        .filter((e) => (e.kind === 'gold' || e.kind === 'material') && e.collected)
-        .map((e) => e.id),
+      defeatedEntityIds: snap.defeatedEntityIds,
+      openedChestIds: snap.openedChestIds,
+      collectedPickupIds: snap.collectedPickupIds,
+      usedShrineIds: snap.usedShrineIds,
+      zoneProgress: zoneProgressRef.current,
     });
     setSavedSummary(getSavedRunSummary());
   }, []);
@@ -213,10 +258,21 @@ export default function App() {
       else if (s === 'comboBreak') audio.playComboBreak();
     }
     for (const v of events.vfx) {
-      const pos =
-        v.target === 'enemy'
-          ? { x: BATTLE_ENEMY_POS.x, y: BATTLE_ENEMY_POS.y - 38 }
-          : { x: 126, y: 145 };
+      let pos = { x: 126, y: 145 };
+      if (v.target === 'enemy') {
+        const battle = battleRef.current;
+        if (battle && v.targetUid) {
+          const addIdx = battle.adds.findIndex((a) => a.uid === v.targetUid);
+          if (addIdx !== -1) {
+            const addPos = BATTLE_ADD_POSITIONS[addIdx] ?? BATTLE_ADD_POSITIONS[0];
+            pos = { x: addPos.x, y: addPos.y - 34 };
+          } else {
+            pos = { x: BATTLE_ENEMY_POS.x, y: BATTLE_ENEMY_POS.y - 38 };
+          }
+        } else {
+          pos = { x: BATTLE_ENEMY_POS.x, y: BATTLE_ENEMY_POS.y - 38 };
+        }
+      }
       const popY = pos.y + (v.yOffset ?? 0);
       vfx.spawnPopup(pos.x, popY, v.text, v.color, v.hitstop ? 1.25 : 1);
       if (v.burstColor) {
@@ -239,11 +295,14 @@ export default function App() {
     clearRunState();
     playerRef.current = createInitialPlayer();
     stageRef.current = buildStage(1);
+    zoneProgressRef.current = {};
     pPlayerRef.current = createPlatformerPlayer();
     lastHudSyncXRef.current = pPlayerRef.current.x;
     battleRef.current = null;
     encounterRef.current = createEncounterTransition();
     nearbyRef.current = null;
+    nearBouncePadRef.current = null;
+    touchDirRef.current = 0;
     victoryRecapRef.current = null;
     setVictoryRecap(null);
     keysHeldRef.current.clear();
@@ -275,18 +334,24 @@ export default function App() {
       equippedPetId: saved.player.equippedPetId ?? null,
       completedArenaIds: saved.player.completedArenaIds ?? [],
       skillPresets: saved.player.skillPresets ?? freshDefaults.skillPresets,
+      voidTowerUnlocked: saved.player.voidTowerUnlocked ?? false,
+      voidTowerBestFloor: saved.player.voidTowerBestFloor ?? 0,
     };
-    const stage = buildStage(saved.zone);
-    const defeatedSet = new Set(saved.defeatedEntityIds);
-    const openedSet = new Set(saved.openedChestIds);
-    const collectedSet = new Set(saved.collectedPickupIds);
-    for (const ent of stage.entities) {
-      if (ent.kind === 'enemy' && defeatedSet.has(ent.id)) ent.defeated = true;
-      if (ent.kind === 'chest' && openedSet.has(ent.id)) ent.opened = true;
-      if ((ent.kind === 'gold' || ent.kind === 'material') && collectedSet.has(ent.id)) {
-        ent.collected = true;
-      }
+    const allZoneProg: Record<number, ZoneEntityProgress> = {
+      ...(saved.zoneProgress ?? {}),
+    };
+    if (!allZoneProg[saved.zone]) {
+      allZoneProg[saved.zone] = {
+        defeatedEntityIds: saved.defeatedEntityIds ?? [],
+        openedChestIds: saved.openedChestIds ?? [],
+        collectedPickupIds: saved.collectedPickupIds ?? [],
+        usedShrineIds: saved.usedShrineIds ?? [],
+      };
     }
+    zoneProgressRef.current = allZoneProg;
+
+    const stage = buildStage(saved.zone);
+    applyZoneProgressToStage(stage, allZoneProg[saved.zone]);
     stageRef.current = stage;
     const pp = createPlatformerPlayer();
     pp.x = Math.max(24, Math.min(stage.width - 24, saved.playerX || 80));
@@ -297,6 +362,8 @@ export default function App() {
     battleRef.current = null;
     encounterRef.current = createEncounterTransition();
     nearbyRef.current = null;
+    nearBouncePadRef.current = null;
+    touchDirRef.current = 0;
     victoryRecapRef.current = null;
     setVictoryRecap(null);
     keysHeldRef.current.clear();
@@ -347,6 +414,32 @@ export default function App() {
         wave,
         { arenaTrialId: trial.id, initialCombo }
       );
+      openModal('none');
+      keysHeldRef.current.clear();
+      setInspectEnemyOpen(false);
+      setBattleItemsOpen(false);
+      updateMode('battle');
+      syncUi();
+    },
+    [openModal, syncUi, updateMode]
+  );
+
+  const handleStartVoidTowerFloor = useCallback(
+    (floor: number) => {
+      if (!playerRef.current.voidTowerUnlocked) return;
+      audio.unlock();
+      const mutator = getVoidTowerMutator(floor);
+      const wave = spawnVoidTowerWave(floor);
+      const rarity = floor % 5 === 0 ? 'boss' : 'elite';
+      audio.playEncounter(rarity);
+      const initialCombo = playerRef.current.unlockedSkillIds.includes('all_t3_overdrive') ? 2 : 0;
+      battleRef.current = createBattleState(10, rarity, `void_tower_f${floor}`, wave, {
+        voidTowerFloor: floor,
+        voidTowerMutator: mutator,
+        initialCombo,
+      });
+      victoryRecapRef.current = null;
+      setVictoryRecap(null);
       openModal('none');
       keysHeldRef.current.clear();
       setInspectEnemyOpen(false);
@@ -432,13 +525,19 @@ export default function App() {
       }
       const nextZone = stageRef.current.zone + 1;
       if (nextZone <= 10) {
+        zoneProgressRef.current[stageRef.current.zone] = snapshotStageProgress(
+          stageRef.current
+        );
         playerRef.current.highestZone = Math.max(
           playerRef.current.highestZone,
           nextZone
         );
-        stageRef.current = buildStage(nextZone);
+        const nextStage = buildStage(nextZone);
+        applyZoneProgressToStage(nextStage, zoneProgressRef.current[nextZone]);
+        stageRef.current = nextStage;
         pPlayerRef.current = createPlatformerPlayer();
         lastHudSyncXRef.current = pPlayerRef.current.x;
+        nearBouncePadRef.current = null;
         audio.playLevelUp();
         showToast(`Entered Zone ${nextZone}: ${stageRef.current.name}!`);
         persistCurrentRun();
@@ -666,11 +765,39 @@ export default function App() {
         encounterRef.current.phase !== 'closing'
       ) {
         const held = keysHeldRef.current;
-        const left = held.has('ArrowLeft') || held.has('KeyA');
-        const right = held.has('ArrowRight') || held.has('KeyD');
+        let gpLeft = false;
+        let gpRight = false;
+        let gpJumpHeld = false;
+        let gpJumpPress = false;
+        let gpInteractPress = false;
+        try {
+          const pads = navigator.getGamepads?.() ?? [];
+          const gp = pads.find((p) => p && p.connected);
+          if (gp) {
+            const ax0 = gp.axes[0] ?? 0;
+            gpLeft = ax0 < -0.35 || Boolean(gp.buttons[14]?.pressed);
+            gpRight = ax0 > 0.35 || Boolean(gp.buttons[15]?.pressed);
+            gpJumpHeld = Boolean(gp.buttons[0]?.pressed);
+            gpInteractPress = Boolean(gp.buttons[2]?.pressed || gp.buttons[3]?.pressed);
+            if (gpJumpHeld && !gamepadPrevRef.current.jump) {
+              gpJumpPress = true;
+            }
+            if (gpInteractPress && !gamepadPrevRef.current.interact) {
+              handleInteract();
+            }
+            gamepadPrevRef.current = { jump: gpJumpHeld, interact: gpInteractPress };
+          }
+        } catch {
+          // Gamepad API unavailable in headless contexts
+        }
+
+        const left =
+          held.has('ArrowLeft') || held.has('KeyA') || touchDirRef.current === -1 || gpLeft;
+        const right =
+          held.has('ArrowRight') || held.has('KeyD') || touchDirRef.current === 1 || gpRight;
         const jumpHeld =
-          held.has('Space') || held.has('ArrowUp') || held.has('KeyW');
-        const jumpJustPressed = jumpJustPressedRef.current;
+          held.has('Space') || held.has('ArrowUp') || held.has('KeyW') || gpJumpHeld;
+        const jumpJustPressed = jumpJustPressedRef.current || gpJumpPress;
         jumpJustPressedRef.current = false;
 
         const stepRes = stepPlatformer(
@@ -733,6 +860,10 @@ export default function App() {
           nearbyRef.current = stepRes.nearbyInteractable;
           movedEnough = true;
         }
+        if (nearBouncePadRef.current?.id !== stepRes.nearBouncePad?.id) {
+          nearBouncePadRef.current = stepRes.nearBouncePad;
+          movedEnough = true;
+        }
         if (movedEnough) {
           lastHudSyncXRef.current = pPlayerRef.current.x;
           syncUi();
@@ -769,7 +900,73 @@ export default function App() {
             ? ARENA_TRIALS.find((t) => t.id === battle.arenaTrialId)
             : undefined;
 
-          if (arenaTrial) {
+          if (battle.voidTowerFloor) {
+            const floor = battle.voidTowerFloor;
+            const isBossFloor = floor % 5 === 0;
+            const bonusGold = 65 * floor;
+            const bonusXp = 90 * floor;
+            playerRef.current.gold += bonusGold;
+            rewards.gold += bonusGold;
+
+            const xpRes = grantXp(playerRef.current, bonusXp);
+            Object.assign(playerRef.current, xpRes.player);
+            rewards.xp += bonusXp;
+            rewards.levelsGained += xpRes.levelsGained;
+
+            playerRef.current.materials.voidEssence += isBossFloor ? 2 : 1;
+            rewards.materials.voidEssence =
+              (rewards.materials.voidEssence ?? 0) + (isBossFloor ? 2 : 1);
+
+            if (isBossFloor) {
+              playerRef.current.materials.starlightOre += 2;
+              rewards.materials.starlightOre =
+                (rewards.materials.starlightOre ?? 0) + 2;
+              const slots: EquipmentSlot[] = ['weapon', 'armor', 'helm', 'charm'];
+              const slot = slots[Math.floor(Math.random() * slots.length)];
+              const mythicGear = generateEquipment(slot, 'mythic', 10);
+              playerRef.current.inventory.push(mythicGear);
+              rewards.items.push(mythicGear);
+            }
+
+            playerRef.current.voidTowerBestFloor = Math.max(
+              playerRef.current.voidTowerBestFloor ?? 0,
+              floor
+            );
+
+            // Restore +30% HP/MP after clearing a tower floor so players can keep climbing
+            const stats = computePlayerStats(playerRef.current);
+            playerRef.current.currentHp = Math.min(
+              stats.hp,
+              playerRef.current.currentHp + Math.round(stats.hp * 0.3)
+            );
+            playerRef.current.currentMp = Math.min(
+              stats.mp,
+              playerRef.current.currentMp + Math.round(stats.mp * 0.3)
+            );
+
+            const recap: VictoryRecapData = {
+              zone: 10,
+              title: `VOID TOWER FL.${floor} CLEARED!`,
+              enemyName: battle.wave[0]?.name ?? `Floor ${floor}`,
+              turnCount: battle.turnCount,
+              xp: rewards.xp,
+              gold: rewards.gold,
+              materials: rewards.materials,
+              items: rewards.items,
+              levelsGained: rewards.levelsGained,
+              maxComboCount: battle.maxComboCount,
+              maxComboDamage: battle.maxComboDamage,
+              voidTowerFloor: floor,
+              nextVoidTowerFloor: floor + 1,
+            };
+            victoryRecapRef.current = recap;
+            setVictoryRecap(recap);
+            battleRef.current = null;
+            setBattleItemsOpen(false);
+            updateMode('explore');
+            persistCurrentRun();
+            syncUi();
+          } else if (arenaTrial) {
             playerRef.current.gold += arenaTrial.bonusGold;
             rewards.gold += arenaTrial.bonusGold;
             const xpRes = grantXp(playerRef.current, arenaTrial.bonusXp);
@@ -824,11 +1021,43 @@ export default function App() {
               stageRef.current.zone === 10 && battle.encounterRarity === 'boss';
 
             if (isFinalBoss) {
-              clearRunState();
-              setSavedSummary(null);
+              const firstFinalClear = !playerRef.current.voidTowerUnlocked;
+              playerRef.current.voidTowerUnlocked = true;
+              const stats = computePlayerStats(playerRef.current);
+              playerRef.current.currentHp = Math.max(
+                playerRef.current.currentHp,
+                Math.round(stats.hp * 0.5)
+              );
+              playerRef.current.currentMp = Math.max(
+                playerRef.current.currentMp,
+                Math.round(stats.mp * 0.5)
+              );
               battleRef.current = null;
-              updateMode('victory');
-              syncUi();
+              setBattleItemsOpen(false);
+              persistCurrentRun();
+
+              if (firstFinalClear) {
+                updateMode('victory');
+                syncUi();
+              } else {
+                const recap: VictoryRecapData = {
+                  zone: 10,
+                  title: 'ARCHITECT MALAKOR VANQUISHED!',
+                  enemyName: worldEnt?.enemyName ?? battle.wave[0]?.name ?? 'Malakor',
+                  turnCount: battle.turnCount,
+                  xp: rewards.xp,
+                  gold: rewards.gold,
+                  materials: rewards.materials,
+                  items: rewards.items,
+                  levelsGained: rewards.levelsGained,
+                  maxComboCount: battle.maxComboCount,
+                  maxComboDamage: battle.maxComboDamage,
+                };
+                victoryRecapRef.current = recap;
+                setVictoryRecap(recap);
+                updateMode('explore');
+                syncUi();
+              }
             } else {
               if (stageRef.current.zone === 8 && battle.encounterRarity === 'boss') {
                 playerRef.current.highestZone = Math.max(
@@ -859,14 +1088,18 @@ export default function App() {
             }
           }
         } else if (battle.phase === 'defeat') {
-          if (battle.arenaTrialId) {
+          if (battle.arenaTrialId || battle.voidTowerFloor) {
             const stats = computePlayerStats(playerRef.current);
             playerRef.current.currentHp = Math.max(25, Math.round(stats.hp * 0.35));
             playerRef.current.currentMp = Math.round(stats.mp * 0.5);
             battleRef.current = null;
             setBattleItemsOpen(false);
             updateMode('explore');
-            showToast('Fell in Arena Trial! Restored safely at Wayside Camp.');
+            showToast(
+              battle.voidTowerFloor
+                ? `Defeated on Void Tower Fl.${battle.voidTowerFloor}! Returned safely to camp.`
+                : 'Fell in Arena Trial! Restored safely at Wayside Camp.'
+            );
             persistCurrentRun();
             syncUi();
           } else {
@@ -1020,6 +1253,7 @@ export default function App() {
           stage={stage}
           playerX={pPlayerRef.current.x}
           nearbyInteractable={nearbyRef.current}
+          nearBouncePad={nearBouncePadRef.current}
           muted={muted}
           onToggleMute={() => {
             const next = !audio.isMuted();
@@ -1033,16 +1267,32 @@ export default function App() {
             setTownInitialTab('arena');
             openModal('town');
           }}
+          onOpenVoidTower={() => {
+            setTownInitialTab('tower');
+            openModal('town');
+          }}
           onInteract={handleInteract}
           onSelectZone={(z) => {
-            stageRef.current = buildStage(z);
+            zoneProgressRef.current[stageRef.current.zone] = snapshotStageProgress(
+              stageRef.current
+            );
+            const nextStage = buildStage(z);
+            applyZoneProgressToStage(nextStage, zoneProgressRef.current[z]);
+            stageRef.current = nextStage;
             pPlayerRef.current = createPlatformerPlayer();
             lastHudSyncXRef.current = pPlayerRef.current.x;
             nearbyRef.current = null;
+            nearBouncePadRef.current = null;
             audio.playMenuBlip();
             showToast(`Traveled to Zone ${z}: ${stageRef.current.name}`);
             persistCurrentRun();
             syncUi();
+          }}
+          onTouchMove={(dir) => {
+            touchDirRef.current = dir;
+          }}
+          onTouchJump={() => {
+            jumpJustPressedRef.current = true;
           }}
         />
       )}
@@ -1074,7 +1324,11 @@ export default function App() {
 
       {/* Battle Victory Recap Banner */}
       {mode === 'explore' && victoryRecap && activeModal === 'none' && (
-        <BattleVictoryModal recap={victoryRecap} onContinue={dismissVictoryRecap} />
+        <BattleVictoryModal
+          recap={victoryRecap}
+          onContinue={dismissVictoryRecap}
+          onContinueVoidTower={handleStartVoidTowerFloor}
+        />
       )}
 
       {/* Inventory & Mid-Stage Equipment Modal */}
@@ -1101,9 +1355,16 @@ export default function App() {
             const idx = player.inventory.findIndex((i) => i.id === itemId);
             if (idx === -1) return;
             const item = player.inventory[idx];
+            if (item.locked) return;
             player.gold += item.sellValue;
             player.inventory.splice(idx, 1);
             audio.playCoin();
+            persistCurrentRun();
+            syncUi();
+          }}
+          onToggleLockItem={(itemId) => {
+            playerRef.current = toggleEquipmentLock(playerRef.current, itemId);
+            audio.playMenuBlip();
             persistCurrentRun();
             syncUi();
           }}
@@ -1289,6 +1550,7 @@ export default function App() {
             syncUi();
           }}
           onStartArenaTrial={handleStartArenaTrial}
+          onStartVoidTowerFloor={handleStartVoidTowerFloor}
         />
       )}
 
@@ -1317,6 +1579,14 @@ export default function App() {
           player={player}
           zone={stage.zone}
           onRestart={startNewRun}
+          onContinuePostgame={() => {
+            updateMode('explore');
+            showToast('Void Tower unlocked! Visit Wayside Camp anytime to climb.');
+            syncUi();
+          }}
+          onEnterVoidTower={() => {
+            handleStartVoidTowerFloor(1);
+          }}
         />
       )}
     </main>

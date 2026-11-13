@@ -1,4 +1,4 @@
-import { Check, Flame, Hammer, Heart, ShoppingBag, Sparkles, Swords, X } from 'lucide-react';
+import { Check, Crown, Flame, Hammer, Heart, Lock, ShoppingBag, Sparkles, Swords, X } from 'lucide-react';
 import { useState } from 'react';
 import {
   ARENA_TRIALS,
@@ -14,10 +14,11 @@ import {
   getEnchantCost,
   getEquipmentEffectiveStats,
   getReforgeCost,
+  getVoidTowerMutator,
 } from '../game/rpgLogic';
 import { EquipmentItem, EquipmentSlot, MaterialId, PlayerState, StatKey } from '../game/types';
 
-export type TownTab = 'shop' | 'blacksmith' | 'pets' | 'arena';
+export type TownTab = 'shop' | 'blacksmith' | 'pets' | 'arena' | 'tower';
 
 interface FireplaceTownModalProps {
   player: PlayerState;
@@ -32,6 +33,7 @@ interface FireplaceTownModalProps {
   onBuyPet: (petId: string) => { ok: boolean; msg: string };
   onEquipPet: (petId: string | null) => void;
   onStartArenaTrial: (trialId: string) => void;
+  onStartVoidTowerFloor: (floor: number) => void;
 }
 
 export function FireplaceTownModal({
@@ -47,9 +49,14 @@ export function FireplaceTownModal({
   onBuyPet,
   onEquipPet,
   onStartArenaTrial,
+  onStartVoidTowerFloor,
 }: FireplaceTownModalProps) {
   const [tab, setTab] = useState<TownTab>(initialTab);
   const [feedback, setFeedback] = useState<string>('');
+  const bestFloor = player.voidTowerBestFloor ?? 0;
+  const [selectedTowerFloor, setSelectedTowerFloor] = useState<number>(() =>
+    Math.max(1, bestFloor + 1)
+  );
 
   const allItems: { item: EquipmentItem; equippedSlot?: EquipmentSlot }[] = [
     ...(['weapon', 'armor', 'helm', 'charm'] as EquipmentSlot[])
@@ -150,6 +157,19 @@ export function FireplaceTownModal({
             >
               <Swords className="w-4 h-4" />
               <span>Boss Rush Arena</span>
+            </button>
+            <button
+              type="button"
+              data-testid="tab-tower"
+              onClick={() => setTab('tower')}
+              className={`flex items-center gap-1.5 font-pixel text-xs px-3.5 py-2 border cursor-pointer ${
+                tab === 'tower'
+                  ? 'bg-[#c084fc] text-[#0e0b16] border-[#0e0b16]'
+                  : 'bg-[#2d2544] text-[#e9d5ff] border-[#7e22ce]'
+              }`}
+            >
+              <Crown className="w-4 h-4" />
+              <span>Void Tower {player.voidTowerUnlocked ? `(Best F${bestFloor})` : '(Locked)'}</span>
             </button>
           </div>
 
@@ -284,7 +304,8 @@ export function FireplaceTownModal({
                     >
                       <div>
                         <div className="flex items-center justify-between gap-2">
-                          <span className="font-pixel text-xs" style={{ color: rMeta.color }}>
+                          <span className="font-pixel text-xs inline-flex items-center gap-1" style={{ color: rMeta.color }}>
+                            {item.locked && <Lock className="w-3 h-3 text-[#f7c948]" />}
                             {item.name} {item.level > 0 ? `+${item.level}` : ''}
                           </span>
                           <span className="text-[10px] font-mono-num text-[#f4efe6]">
@@ -484,6 +505,117 @@ export function FireplaceTownModal({
                   );
                 })}
               </div>
+            </div>
+          )}
+
+          {tab === 'tower' && (
+            <div className="flex flex-col gap-4" data-testid="void-tower-panel">
+              {!player.voidTowerUnlocked ? (
+                <div className="p-5 bg-[#0e0b16] border-2 border-[#7e22ce] text-center space-y-2">
+                  <Crown className="w-8 h-8 text-[#c084fc] mx-auto" />
+                  <h3 className="font-pixel text-sm text-[#e9d5ff]">
+                    ENDLESS VOID TOWER SEALED
+                  </h3>
+                  <p className="text-xs text-[#cbd5e1] max-w-lg mx-auto">
+                    Defeat Architect Malakor atop Zone 10: The Void Spire to unseal the Endless Void Tower. Your hero, skills, pets, and gear remain intact so you can push infinite scaling floors!
+                  </p>
+                </div>
+              ) : (
+                (() => {
+                  const mutator = getVoidTowerMutator(selectedTowerFloor);
+                  const isBossFloor = selectedTowerFloor % 5 === 0;
+                  const checkpoints: number[] = [1];
+                  for (let f = 5; f <= bestFloor; f += 5) {
+                    checkpoints.push(f);
+                  }
+                  const nextResumeFloor = bestFloor + 1;
+                  if (!checkpoints.includes(nextResumeFloor)) {
+                    checkpoints.push(nextResumeFloor);
+                  }
+
+                  return (
+                    <>
+                      <div className="bg-[#0e0b16] border-2 border-[#c084fc] p-4 flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="font-pixel text-sm text-[#e9d5ff]">
+                            ENDLESS VOID TOWER · POST-ZONE 10
+                          </div>
+                          <div className="text-xs text-[#cbd5e1] mt-1">
+                            Infinitely scaling floors with rotating Rift Mutators. Restores +30% HP/MP on floor clear; defeat returns you safely to camp without losing gear or progress.
+                          </div>
+                        </div>
+                        <div className="bg-[#2e1065] border border-[#c084fc] px-3 py-2 text-right font-mono-num">
+                          <div className="text-[10px] text-[#e9d5ff]">BEST FLOOR</div>
+                          <div className="font-pixel text-base text-[#facc15]">
+                            F{bestFloor}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="bg-[#0e0b16] border border-[#4b3f6b] p-3.5 space-y-2.5">
+                          <div className="font-pixel text-xs text-[#f7c948]">
+                            Select Starting Floor (5-Floor Checkpoints)
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {checkpoints.map((f) => (
+                              <button
+                                key={f}
+                                type="button"
+                                onClick={() => setSelectedTowerFloor(f)}
+                                className={`font-pixel text-[11px] px-2.5 py-1.5 border cursor-pointer ${
+                                  selectedTowerFloor === f
+                                    ? 'bg-[#c084fc] text-[#0e0b16] border-[#0e0b16]'
+                                    : f % 5 === 0
+                                    ? 'bg-[#3d1221] text-[#fecdd3] border-[#f43f5e]/60'
+                                    : 'bg-[#2d2544] text-[#e6d8bd] border-[#4b3f6b]'
+                                }`}
+                              >
+                                Floor {f}
+                                {f === nextResumeFloor && f > 1 ? ' (Next)' : f % 5 === 0 ? ' (Boss)' : ''}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div
+                          className="bg-[#0e0b16] border-2 p-3.5 flex flex-col justify-between gap-2"
+                          style={{ borderColor: mutator.accent }}
+                        >
+                          <div>
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-pixel text-xs text-[#f4efe6]">
+                                Floor {selectedTowerFloor} {isBossFloor ? '· OVERLORD BOSS' : '· Rift Wave'}
+                              </span>
+                              <span
+                                className="font-pixel text-[10px] px-2 py-0.5 bg-[#1b162b] border"
+                                style={{ color: mutator.accent, borderColor: mutator.accent }}
+                              >
+                                {mutator.name}
+                              </span>
+                            </div>
+                            <p className="text-xs text-[#cbd5e1] mt-1.5">{mutator.description}</p>
+                            {isBossFloor && (
+                              <p className="text-[11px] text-[#facc15] font-mono-num mt-1">
+                                Boss Milestone: Guaranteed Mythic Gear + Void Essence + Starlight Ore!
+                              </p>
+                            )}
+                          </div>
+
+                          <button
+                            type="button"
+                            data-testid="start-void-tower"
+                            onClick={() => onStartVoidTowerFloor(selectedTowerFloor)}
+                            className="w-full font-pixel text-xs py-2.5 bg-[#c084fc] text-[#0e0b16] border-2 border-[#0e0b16] shadow-[0_3px_0_#0e0b16] hover:bg-[#d8b4fe] cursor-pointer"
+                          >
+                            Challenge Void Tower · Floor {selectedTowerFloor}
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()
+              )}
             </div>
           )}
         </div>

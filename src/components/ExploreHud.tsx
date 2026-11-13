@@ -1,9 +1,16 @@
+import { useState } from 'react';
 import {
   AlertTriangle,
+  ArrowUp,
   Backpack,
+  ChevronLeft,
+  ChevronRight,
   CloudRain,
+  Crown,
   Flame,
+  Gamepad2,
   GitBranch,
+  Hand,
   Pause,
   Snowflake,
   Sparkles,
@@ -24,14 +31,18 @@ interface ExploreHudProps {
   stage: StageDefinition;
   playerX: number;
   nearbyInteractable: WorldEntity | null;
+  nearBouncePad?: WorldEntity | null;
   muted: boolean;
   onToggleMute: () => void;
   onPause: () => void;
   onOpenInventory: () => void;
   onOpenSkillTree: () => void;
   onOpenArena?: () => void;
+  onOpenVoidTower?: () => void;
   onInteract: () => void;
   onSelectZone: (zone: number) => void;
+  onTouchMove?: (dir: -1 | 0 | 1) => void;
+  onTouchJump?: () => void;
 }
 
 export function ExploreHud({
@@ -39,15 +50,21 @@ export function ExploreHud({
   stage,
   playerX,
   nearbyInteractable,
+  nearBouncePad,
   muted,
   onToggleMute,
   onPause,
   onOpenInventory,
   onOpenSkillTree,
   onOpenArena,
+  onOpenVoidTower,
   onInteract,
   onSelectZone,
+  onTouchMove,
+  onTouchJump,
 }: ExploreHudProps) {
+  const [showTouchPad, setShowTouchPad] = useState(false);
+
   const stats = computePlayerStats(player);
   const weatherProfile = getZoneWeatherProfile(stage.zone);
   const weatherFx = getWeatherCombatEffect(stage.zone);
@@ -82,11 +99,11 @@ export function ExploreHud({
   );
 
   return (
-    <div className="fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-3 md:p-4">
+    <div className="fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-2.5 md:p-4">
       {/* Top Perimeter Clusters */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-2 md:gap-4">
         {/* Top-Left: Compact Player Vitality, Pet & Zone */}
-        <div className="pointer-events-auto bg-[#1b162b]/90 border-2 border-[#4b3f6b] px-3 py-2 shadow-[0_3px_0_#0e0b16] min-w-[238px]">
+        <div className="pointer-events-auto bg-[#1b162b]/90 border-2 border-[#4b3f6b] px-3 py-2 shadow-[0_3px_0_#0e0b16] min-w-[220px] md:min-w-[238px]">
           <div className="flex items-center justify-between gap-3 mb-1.5">
             <span className="font-pixel text-xs text-[#f7c948]">
               {player.name} · {player.className} Lv.{player.level}
@@ -152,9 +169,12 @@ export function ExploreHud({
           )}
         </div>
 
-        {/* Top-Center: Stage Banner & Quick Zone Selector (Z1..Z10) */}
-        <div className="pointer-events-auto hidden md:flex flex-col items-center bg-[#1b162b]/90 border-2 border-[#4b3f6b] px-4 py-1.5 shadow-[0_3px_0_#0e0b16]">
-          <div className="font-pixel text-xs text-[#f4efe6]">{stage.name}</div>
+        {/* Top-Center: Responsive Stage Banner & Quick Zone Selector (Z1..Z10) */}
+        <div
+          data-testid="zone-selector-panel"
+          className="pointer-events-auto flex flex-col items-center bg-[#1b162b]/90 border-2 border-[#4b3f6b] px-3 md:px-4 py-1.5 shadow-[0_3px_0_#0e0b16] order-3 lg:order-2 w-full lg:w-auto"
+        >
+          <div className="font-pixel text-[11px] md:text-xs text-[#f4efe6]">{stage.name}</div>
           <div className="flex items-center gap-1 mt-1 flex-wrap justify-center">
             {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((z) => (
               <button
@@ -200,13 +220,25 @@ export function ExploreHud({
         </div>
 
         {/* Top-Right: Menu & Audio Utilities */}
-        <div className="pointer-events-auto flex items-center gap-2">
+        <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-1.5 md:gap-2 order-2 lg:order-3">
+          {player.voidTowerUnlocked && onOpenVoidTower && (
+            <button
+              type="button"
+              data-testid="btn-void-tower-shortcut"
+              onClick={onOpenVoidTower}
+              className="flex items-center gap-1.5 bg-[#2e1065]/95 border-2 border-[#c084fc] hover:border-[#facc15] px-2.5 md:px-3 py-2 font-pixel text-xs text-[#f5d0fe] shadow-[0_3px_0_#0e0b16] cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <Crown className="w-4 h-4 text-[#facc15]" />
+              <span>Void Tower</span>
+            </button>
+          )}
+
           {onOpenArena && player.highestZone >= 2 && (
             <button
               type="button"
               data-testid="btn-arena-shortcut"
               onClick={onOpenArena}
-              className="flex items-center gap-1.5 bg-[#3d1221]/95 border-2 border-[#fb7185] hover:border-[#facc15] px-3 py-2 font-pixel text-xs text-[#fecdd3] shadow-[0_3px_0_#0e0b16] cursor-pointer whitespace-nowrap shrink-0"
+              className="flex items-center gap-1.5 bg-[#3d1221]/95 border-2 border-[#fb7185] hover:border-[#facc15] px-2.5 md:px-3 py-2 font-pixel text-xs text-[#fecdd3] shadow-[0_3px_0_#0e0b16] cursor-pointer whitespace-nowrap shrink-0"
             >
               <Swords className="w-4 h-4 text-[#fb7185]" />
               <span>Arena</span>
@@ -216,7 +248,7 @@ export function ExploreHud({
           <button
             type="button"
             onClick={onOpenInventory}
-            className="flex items-center gap-1.5 bg-[#1b162b]/95 border-2 border-[#4b3f6b] hover:border-[#f7c948] px-3 py-2 font-pixel text-xs text-[#f4efe6] shadow-[0_3px_0_#0e0b16] cursor-pointer whitespace-nowrap shrink-0"
+            className="flex items-center gap-1.5 bg-[#1b162b]/95 border-2 border-[#4b3f6b] hover:border-[#f7c948] px-2.5 md:px-3 py-2 font-pixel text-xs text-[#f4efe6] shadow-[0_3px_0_#0e0b16] cursor-pointer whitespace-nowrap shrink-0"
           >
             <Backpack className="w-4 h-4 text-[#f7c948]" />
             <span>Gear [I]</span>
@@ -225,7 +257,7 @@ export function ExploreHud({
           <button
             type="button"
             onClick={onOpenSkillTree}
-            className="relative flex items-center gap-1.5 bg-[#1b162b]/95 border-2 border-[#4b3f6b] hover:border-[#38bdf8] px-3 py-2 font-pixel text-xs text-[#f4efe6] shadow-[0_3px_0_#0e0b16] cursor-pointer whitespace-nowrap shrink-0"
+            className="relative flex items-center gap-1.5 bg-[#1b162b]/95 border-2 border-[#4b3f6b] hover:border-[#38bdf8] px-2.5 md:px-3 py-2 font-pixel text-xs text-[#f4efe6] shadow-[0_3px_0_#0e0b16] cursor-pointer whitespace-nowrap shrink-0"
           >
             <GitBranch className="w-4 h-4 text-[#38bdf8]" />
             <span>Skills [K]</span>
@@ -234,6 +266,25 @@ export function ExploreHud({
                 {player.skillPoints}
               </span>
             )}
+          </button>
+
+          <button
+            type="button"
+            tabIndex={-1}
+            data-testid="toggle-touch-controls"
+            aria-label={showTouchPad ? 'Hide on-screen controls' : 'Show on-screen controls'}
+            title="Toggle On-Screen Touch/Mouse Controls"
+            onClick={(e) => {
+              e.currentTarget.blur();
+              setShowTouchPad((v) => !v);
+            }}
+            className={`bg-[#1b162b]/95 border-2 p-2 shadow-[0_3px_0_#0e0b16] cursor-pointer ${
+              showTouchPad
+                ? 'border-[#38bdf8] text-[#38bdf8]'
+                : 'border-[#4b3f6b] hover:border-[#f7c948] text-[#f4efe6]'
+            }`}
+          >
+            <Gamepad2 className="w-4 h-4" />
           </button>
 
           <button
@@ -264,7 +315,7 @@ export function ExploreHud({
         </div>
       </div>
 
-      {/* Bottom Interactive Prompt, Stage Minimap & Controls Hint */}
+      {/* Bottom Interactive Prompt, Stage Minimap, Optional Touch Controls & Hint */}
       <div className="flex flex-col items-center gap-2 pb-1">
         {nearbyThreat && (
           <div
@@ -283,7 +334,7 @@ export function ExploreHud({
           </div>
         )}
 
-        {interactLabel && (
+        {interactLabel ? (
           <button
             type="button"
             onClick={onInteract}
@@ -291,6 +342,69 @@ export function ExploreHud({
           >
             {interactLabel}
           </button>
+        ) : (
+          nearBouncePad && (
+            <div
+              data-testid="bounce-pad-hint"
+              className="pointer-events-none animate-juicy-pop font-pixel text-xs px-4 py-1.5 bg-[#083344]/95 text-[#22d3ee] border-2 border-[#22d3ee] shadow-[0_3px_0_#0e0b16]"
+            >
+              Super Bounce Pad · Press [SPACE] to Launch!
+            </div>
+          )
+        )}
+
+        {/* Optional On-Screen Touch / Mouse Controls */}
+        {showTouchPad && (
+          <div
+            data-testid="explore-touch-pad"
+            className="pointer-events-auto w-full max-w-2xl flex items-center justify-between px-2"
+          >
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                aria-label="Move left"
+                onPointerDown={() => onTouchMove?.(-1)}
+                onPointerUp={() => onTouchMove?.(0)}
+                onPointerLeave={() => onTouchMove?.(0)}
+                onPointerCancel={() => onTouchMove?.(0)}
+                className="w-12 h-11 flex items-center justify-center bg-[#1b162b]/95 border-2 border-[#4b3f6b] active:border-[#f7c948] text-[#f4efe6] shadow-[0_3px_0_#0e0b16] cursor-pointer select-none"
+              >
+                <ChevronLeft className="w-6 h-6" />
+              </button>
+              <button
+                type="button"
+                aria-label="Move right"
+                onPointerDown={() => onTouchMove?.(1)}
+                onPointerUp={() => onTouchMove?.(0)}
+                onPointerLeave={() => onTouchMove?.(0)}
+                onPointerCancel={() => onTouchMove?.(0)}
+                className="w-12 h-11 flex items-center justify-center bg-[#1b162b]/95 border-2 border-[#4b3f6b] active:border-[#f7c948] text-[#f4efe6] shadow-[0_3px_0_#0e0b16] cursor-pointer select-none"
+              >
+                <ChevronRight className="w-6 h-6" />
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              {nearbyInteractable && (
+                <button
+                  type="button"
+                  onClick={onInteract}
+                  className="px-3.5 h-11 flex items-center gap-1.5 bg-[#f7c948] text-[#0e0b16] border-2 border-[#0e0b16] font-pixel text-xs shadow-[0_3px_0_#0e0b16] cursor-pointer"
+                >
+                  <Hand className="w-4 h-4" />
+                  <span>ACT</span>
+                </button>
+              )}
+              <button
+                type="button"
+                aria-label="Jump"
+                onPointerDown={() => onTouchJump?.()}
+                className="px-4 h-11 flex items-center gap-1.5 bg-[#1e293b]/95 border-2 border-[#38bdf8] active:bg-[#0ea5e9] text-[#bae6fd] font-pixel text-xs shadow-[0_3px_0_#0e0b16] cursor-pointer select-none"
+              >
+                <ArrowUp className="w-4 h-4" />
+                <span>JUMP</span>
+              </button>
+            </div>
+          </div>
         )}
 
         {/* 16-Bit Stage Minimap & Threat Tracker */}
@@ -364,7 +478,7 @@ export function ExploreHud({
         </div>
 
         <div className="text-[11px] font-pixel text-[#f4efe6]/85 drop-shadow-[0_2px_0_#0e0b16]">
-          A/D Move · Space Jump · E Interact
+          A/D Move · Space Jump · E Interact · Gamepad Supported
         </div>
       </div>
     </div>

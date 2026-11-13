@@ -11,7 +11,12 @@ import {
   stepBattleTimeline,
   switchBattleTarget,
 } from './battleEngine';
-import { createInitialPlayer, spawnEnemyFromTemplate } from './rpgLogic';
+import {
+  createInitialPlayer,
+  spawnEnemyFromTemplate,
+  spawnVoidTowerWave,
+} from './rpgLogic';
+import { VOID_TOWER_MUTATORS } from './data';
 import { buildStage } from './stages';
 import { createPlatformerPlayer, stepPlatformer } from './platformer';
 
@@ -416,6 +421,7 @@ test('Combat log records turn-stamped scrolling history (>6 entries) including c
 test('Multi-phase Boss enters Phase 2 Barrier + Summon <=55% HP and Phase 3 Enrage <=28% HP', () => {
   const player = createInitialPlayer();
   const boss = spawnEnemyFromTemplate('void_architect_boss');
+  boss.stats.dodge = 0;
   const maxHp = boss.stats.hp;
   const battle = createBattleState(10, 'boss', 'z10_boss', [boss]);
   assert.equal(boss.bossPhase, 1);
@@ -506,7 +512,13 @@ test('Zones 9-10 buildStage includes Bounce Pads, Hazards, Blessing Shrines and 
   const p = createPlatformerPlayer();
   p.x = bounce.x;
   p.y = bounce.y;
-  const bounceRes = stepPlatformer(p, stage9, { left: false, right: false, jumpJustPressed: false, jumpHeld: false }, 0.016);
+  // Walking flat past a bounce pad should NOT involuntarily launch the player
+  const walkPastRes = stepPlatformer(p, stage9, { left: false, right: false, jumpJustPressed: false, jumpHeld: false }, 0.016);
+  assert.equal(walkPastRes.bounced, false);
+  assert.equal(walkPastRes.nearBouncePad?.id, bounce.id);
+
+  // Jumping while on a bounce pad triggers the high super bounce
+  const bounceRes = stepPlatformer(p, stage9, { left: false, right: false, jumpJustPressed: true, jumpHeld: true }, 0.016);
   assert.equal(bounceRes.bounced, true);
   assert.ok(p.vy < -350);
 
@@ -521,4 +533,33 @@ test('Zones 9-10 buildStage includes Bounce Pads, Hazards, Blessing Shrines and 
   p.y = shrine.y;
   const shrineRes = stepPlatformer(p, stage9, { left: false, right: false, jumpJustPressed: false, jumpHeld: false }, 0.016);
   assert.equal(shrineRes.nearbyInteractable?.kind, 'shrine');
+});
+
+test('Target-accurate VFX routes targetUid to flanking adds and Void Tower mutators apply', () => {
+  const player = createInitialPlayer();
+  const mirrorMutator = VOID_TOWER_MUTATORS.find((m) => m.id === 'mirror_rift')!;
+  const wave = spawnVoidTowerWave(2);
+  const battle = createBattleState(10, 'elite', 'void_tower_f2', wave, {
+    voidTowerFloor: 2,
+    voidTowerMutator: mirrorMutator,
+  });
+
+  // mirror_rift spawns a Phantom Rift Stalker add immediately
+  assert.ok(battle.adds.length >= 1);
+  const addTarget = battle.adds[0];
+  addTarget.stats.dodge = 0;
+  switchBattleTarget(battle, addTarget.uid);
+  assert.equal(getActiveEnemy(battle)?.uid, addTarget.uid);
+
+  const ev = executePlayerAction(battle, player, { kind: 'attack' });
+  const enemyVfx = ev.vfx.filter((v) => v.target === 'enemy');
+  assert.ok(enemyVfx.length > 0);
+  assert.ok(enemyVfx.some((v) => v.targetUid === addTarget.uid));
+
+  const astralMutator = VOID_TOWER_MUTATORS.find((m) => m.id === 'astral_overdrive')!;
+  const overdriveBattle = createBattleState(10, 'elite', 'void_tower_f4', spawnVoidTowerWave(4), {
+    voidTowerFloor: 4,
+    voidTowerMutator: astralMutator,
+  });
+  assert.ok(overdriveBattle.comboCount >= 3);
 });

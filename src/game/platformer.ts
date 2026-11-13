@@ -26,6 +26,7 @@ export interface PlatformerStepResult {
   jumped: boolean;
   bounced: boolean;
   hazardDamagePct: number;
+  nearBouncePad: WorldEntity | null;
   nearbyInteractable: WorldEntity | null;
   triggeredEnemy: WorldEntity | null;
 }
@@ -154,6 +155,7 @@ export function stepPlatformer(
   player.scaleY += (1 - player.scaleY) * Math.min(1, dt * 14);
 
   // Patrol enemies & check pickups / props / hazards / encounters
+  let nearBouncePad: WorldEntity | null = null;
   let nearbyInteractable: WorldEntity | null = null;
   let triggeredEnemy: WorldEntity | null = null;
 
@@ -184,13 +186,18 @@ export function stepPlatformer(
       if (ent.materialId) {
         collectedMaterial = { id: ent.materialId, amount: ent.amount ?? 1 };
       }
-    } else if (ent.kind === 'bounce_pad' && dx < 16 && dy < 16 && player.vy >= -40) {
-      player.vy = ent.bounceVelocity ?? -415;
-      player.onGround = false;
-      player.coyoteTimer = 0;
-      player.scaleX = 0.78;
-      player.scaleY = 1.25;
-      bounced = true;
+    } else if (ent.kind === 'bounce_pad' && dx < 16 && dy < 16) {
+      nearBouncePad = ent;
+      const landedFromAir = !wasOnGround && player.vy >= 0;
+      if (jumped || input.jumpJustPressed || landedFromAir) {
+        player.vy = ent.bounceVelocity ?? -415;
+        player.onGround = false;
+        player.coyoteTimer = 0;
+        player.jumpBufferTimer = 0;
+        player.scaleX = 0.78;
+        player.scaleY = 1.25;
+        bounced = true;
+      }
     } else if (
       ent.kind === 'hazard' &&
       player.invulnTimer <= 0 &&
@@ -233,6 +240,7 @@ export function stepPlatformer(
     jumped,
     bounced,
     hazardDamagePct,
+    nearBouncePad,
     nearbyInteractable,
     triggeredEnemy,
   };

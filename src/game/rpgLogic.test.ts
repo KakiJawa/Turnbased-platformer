@@ -19,6 +19,7 @@ import {
   generateEquipment,
   getRespecCost,
   getTotalCharacterLevel,
+  getVoidTowerMutator,
   getXpToNextLevel,
   grantXp,
   loadSkillPreset,
@@ -28,7 +29,9 @@ import {
   saveSkillPreset,
   spawnArenaBossWave,
   spawnEnemyWave,
+  spawnVoidTowerWave,
   toggleEquipSkill,
+  toggleEquipmentLock,
   unlockSkillNode,
 } from './rpgLogic';
 import { ARENA_TRIALS, PET_CATALOG, SKILL_TREE } from './data';
@@ -328,4 +331,39 @@ test('Pet Familiars can be purchased with gold, equipped, and grant passive stat
   const bossWave = spawnArenaBossWave(apex);
   assert.equal(bossWave.length, apex.bossTemplateIds.length);
   assert.ok(bossWave.every((b) => b.rarity === 'boss'));
+});
+
+test('Equipment locking protects items from bulk sell/salvage and Void Tower scales per floor', () => {
+  let p = createInitialPlayer();
+  const c1 = generateEquipment('armor', 'common', 1);
+  const c2 = generateEquipment('helm', 'uncommon', 1);
+  p.inventory = [c1, c2];
+
+  // Lock c1; only c2 should be disposed in bulk
+  p = toggleEquipmentLock(p, c1.id);
+  assert.equal(p.inventory[0].locked, true);
+
+  const sold = bulkDisposeInventory(p, 'uncommon', 'sell');
+  assert.equal(sold.count, 1);
+  assert.equal(sold.goldGained, c2.sellValue);
+  assert.equal(sold.player.inventory.length, 1);
+  assert.equal(sold.player.inventory[0].id, c1.id);
+
+  // Unlock c1 and sell it normally
+  const unlocked = toggleEquipmentLock(sold.player, c1.id);
+  assert.equal(unlocked.inventory[0].locked, false);
+  const soldUnlocked = bulkDisposeInventory(unlocked, 'uncommon', 'sell');
+  assert.equal(soldUnlocked.count, 1);
+  assert.equal(soldUnlocked.player.inventory.length, 0);
+
+  // Void Tower floor scaling & mutators
+  const f1Wave = spawnVoidTowerWave(1);
+  const f5Wave = spawnVoidTowerWave(5);
+  assert.equal(f1Wave.length, 2);
+  assert.equal(f5Wave.length, 1);
+  assert.equal(f5Wave[0].rarity, 'boss');
+  assert.ok(f5Wave[0].stats.hp > f1Wave[0].stats.hp * 1.4);
+  const mut1 = getVoidTowerMutator(1);
+  const mut2 = getVoidTowerMutator(2);
+  assert.notEqual(mut1.id, mut2.id);
 });

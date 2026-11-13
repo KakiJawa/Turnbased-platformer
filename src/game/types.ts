@@ -40,6 +40,7 @@ export interface EquipmentItem {
   growthPerLevel: Partial<Stats>;
   affixes: Affix[];
   sellValue: number;
+  locked?: boolean;
 }
 
 export interface ConsumableItem {
@@ -139,6 +140,21 @@ export interface ArenaTrialDefinition {
   bonusXp: number;
   guaranteedRarity: Rarity;
   rewardZoneLevel: number;
+}
+
+export type VoidTowerMutatorId =
+  | 'abyssal_fury'
+  | 'mirror_rift'
+  | 'void_barrier'
+  | 'astral_overdrive'
+  | 'null_static'
+  | 'fractured_space';
+
+export interface VoidTowerMutator {
+  id: VoidTowerMutatorId;
+  name: string;
+  description: string;
+  accent: string;
 }
 
 export interface SkillDefinition {
@@ -289,6 +305,8 @@ export interface PlayerState {
   ownedPetIds: string[];
   equippedPetId: string | null;
   completedArenaIds: string[];
+  voidTowerUnlocked?: boolean;
+  voidTowerBestFloor?: number;
   highestZone: number;
   monstersDefeated: number;
 }

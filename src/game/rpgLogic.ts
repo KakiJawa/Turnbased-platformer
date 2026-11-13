@@ -10,6 +10,7 @@ import {
   TIER3_SPECIALIZATIONS,
   VILLAGER_BASE_STATS,
   VILLAGER_GROWTH_PER_LEVEL,
+  VOID_TOWER_MUTATORS,
 } from './data';
 import { RARITY_META, RARITY_ORDER } from './palette';
 import {
@@ -29,6 +30,7 @@ import {
   StatKey,
   Stats,
   Tier3SpecializationId,
+  VoidTowerMutator,
 } from './types';
 
 export const MAX_EQUIPPED_SKILLS = 6;
@@ -105,6 +107,8 @@ export function createInitialPlayer(): PlayerState {
     ownedPetIds: [],
     equippedPetId: null,
     completedArenaIds: [],
+    voidTowerUnlocked: false,
+    voidTowerBestFloor: 0,
     highestZone: 1,
     monstersDefeated: 0,
   };
@@ -530,7 +534,7 @@ export function bulkDisposeInventory(
   ];
 
   for (const item of player.inventory) {
-    if (RARITY_ORDER.indexOf(item.rarity) <= maxIdx) {
+    if (!item.locked && RARITY_ORDER.indexOf(item.rarity) <= maxIdx) {
       count += 1;
       if (mode === 'sell') {
         goldGained += item.sellValue;
@@ -1017,8 +1021,81 @@ export function spawnEnemyWave(
   return wave;
 }
 
+export function toggleEquipmentLock(player: PlayerState, itemId: string): PlayerState {
+  const nextInv = player.inventory.map((it) =>
+    it.id === itemId ? { ...it, locked: !it.locked } : it
+  );
+  return { ...player, inventory: nextInv };
+}
+
 export function spawnArenaBossWave(trial: ArenaTrialDefinition): CombatEnemy[] {
   return trial.bossTemplateIds.map((id) => spawnEnemyFromTemplate(id));
+}
+
+export function getVoidTowerMutator(floor: number): VoidTowerMutator {
+  const idx = Math.abs(Math.max(1, floor) - 1) % VOID_TOWER_MUTATORS.length;
+  return VOID_TOWER_MUTATORS[idx];
+}
+
+export function spawnVoidTowerWave(
+  floor: number,
+  mutator: VoidTowerMutator = getVoidTowerMutator(floor)
+): CombatEnemy[] {
+  const safeFloor = Math.max(1, Math.floor(floor));
+  const isBossFloor = safeFloor % 5 === 0;
+  const levelScale = 2 + safeFloor * 2;
+  const hpMult = (1 + (safeFloor - 1) * 0.16) * (mutator.id === 'fractured_space' ? 1.2 : 1);
+  const dmgMult = 1 + (safeFloor - 1) * 0.12;
+  const defMult = 1 + (safeFloor - 1) * 0.08;
+
+  const bossPool = ['citadel_boss', 'peak_dragon_boss', 'star_empress_boss', 'void_architect_boss'];
+  const floorPool = ['void_warden', 'star_leviathan', 'void_harbinger', 'star_sentinel', 'void_stalker'];
+
+  const templateIds = isBossFloor
+    ? [bossPool[(Math.floor(safeFloor / 5) - 1) % bossPool.length]]
+    : [
+        floorPool[safeFloor % floorPool.length],
+        floorPool[(safeFloor + 2) % floorPool.length],
+      ];
+
+  return templateIds.map((tplId, idx) => {
+    const en = spawnEnemyFromTemplate(tplId, levelScale);
+    en.zone = 10;
+    en.level = 50 + safeFloor * 3;
+    en.name = `F${safeFloor} · ${en.name}`;
+    en.stats.hp = Math.round(en.stats.hp * hpMult);
+    en.currentHp = en.stats.hp;
+    en.stats.atk = Math.round(en.stats.atk * dmgMult);
+    en.stats.matk = Math.round(en.stats.matk * dmgMult);
+    en.stats.def = Math.round(en.stats.def * defMult);
+    en.stats.mdef = Math.round(en.stats.mdef * defMult);
+    en.xpReward = Math.round(en.xpReward * (1 + safeFloor * 0.15));
+    en.goldReward = Math.round(en.goldReward * (1 + safeFloor * 0.2));
+    if (mutator.id === 'abyssal_fury') {
+      en.buffs = [
+        {
+          id: `vt_fury_${safeFloor}_${idx}`,
+          type: 'atk_up',
+          label: 'Abyssal Fury',
+          isDebuff: false,
+          turns: 99,
+          potency: 25,
+        },
+        {
+          id: `vt_spd_${safeFloor}_${idx}`,
+          type: 'spd_up',
+          label: 'Abyssal Haste',
+          isDebuff: false,
+          turns: 99,
+          potency: 20,
+        },
+      ];
+    }
+    if (mutator.id === 'void_barrier' && idx === 0) {
+      en.shieldHits = Math.max(en.shieldHits, 2);
+    }
+    return en;
+  });
 }
 
 export interface DamageResult {

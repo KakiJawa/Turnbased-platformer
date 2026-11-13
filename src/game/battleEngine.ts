@@ -20,6 +20,7 @@ import {
   PlayerState,
   QteState,
   Stats,
+  VoidTowerMutator,
 } from './types';
 import {
   applyWeatherStatModifiers,
@@ -59,6 +60,8 @@ export interface BattleState {
   encounterRarity: EnemyRarity;
   sourceEntityId: string;
   arenaTrialId?: string;
+  voidTowerFloor?: number;
+  voidTowerMutator?: VoidTowerMutator;
   wave: CombatEnemy[];
   waveIndex: number;
   adds: CombatEnemy[];
@@ -144,7 +147,14 @@ export function createBattleState(
   encounterRarity: EnemyRarity,
   sourceEntityId: string,
   wave: CombatEnemy[],
-  options?: string | { arenaTrialId?: string; initialCombo?: number }
+  options?:
+    | string
+    | {
+        arenaTrialId?: string;
+        initialCombo?: number;
+        voidTowerFloor?: number;
+        voidTowerMutator?: VoidTowerMutator;
+      }
 ): BattleState {
   const opts =
     typeof options === 'string'
@@ -152,23 +162,28 @@ export function createBattleState(
       : options ?? {};
   const first = wave[0];
   const adds: CombatEnemy[] = [];
+  const mutator = opts.voidTowerMutator;
   const logs: BattleLogEntry[] = [
     {
       id: logSeq++,
       turn: 1,
-      text: `Wave 1/${wave.length}: ${first.name} steps forward!`,
+      text: opts.voidTowerFloor
+        ? `Void Tower Floor ${opts.voidTowerFloor}: ${first.name} emerges!`
+        : `Wave 1/${wave.length}: ${first.name} steps forward!`,
       tone: 'info',
     },
     {
       id: logSeq++,
       turn: 1,
-      text: `Weather: ${getWeatherCombatEffect(zone).name} (${getWeatherCombatEffect(zone).shortEffect})`,
+      text: mutator
+        ? `Tower Mutator: ${mutator.name} (${mutator.description})`
+        : `Weather: ${getWeatherCombatEffect(zone).name} (${getWeatherCombatEffect(zone).shortEffect})`,
       tone: 'info',
     },
   ];
 
   // Dual-enemy encounters spawn partner add on the field alongside primary enemy
-  if (!opts.arenaTrialId && first) {
+  if (!opts.arenaTrialId && !opts.voidTowerFloor && first) {
     const tpl = ENEMY_TEMPLATES.find((t) => t.id === first.templateId);
     if (tpl?.dualPartnerId) {
       const partner = spawnEnemyFromTemplate(tpl.dualPartnerId);
@@ -183,12 +198,26 @@ export function createBattleState(
     }
   }
 
-  const startCombo = opts.initialCombo ?? 0;
+  // Endless Void Tower Mirror Rift mutator spawns an extra Rift Stalker phantom
+  if (mutator?.id === 'mirror_rift') {
+    const phantom = spawnEnemyFromTemplate('void_stalker', 2 + (opts.voidTowerFloor ?? 1));
+    phantom.name = `Phantom ${phantom.name}`;
+    phantom.isAdd = true;
+    adds.push(phantom);
+  }
+
+  const startCombo = Math.max(
+    opts.initialCombo ?? 0,
+    mutator?.id === 'astral_overdrive' ? 3 : 0
+  );
   if (startCombo > 0) {
     logs.unshift({
       id: logSeq++,
       turn: 1,
-      text: `Overdrive Convergence: Started battle with ${startCombo}x Combo!`,
+      text:
+        mutator?.id === 'astral_overdrive'
+          ? `Astral Surge Mutator: Started battle with ${startCombo}x Combo & +25% Crit DMG!`
+          : `Overdrive Convergence: Started battle with ${startCombo}x Combo!`,
       tone: 'stagger',
     });
   }
@@ -198,6 +227,8 @@ export function createBattleState(
     encounterRarity,
     sourceEntityId,
     arenaTrialId: opts.arenaTrialId,
+    voidTowerFloor: opts.voidTowerFloor,
+    voidTowerMutator: mutator,
     wave,
     waveIndex: 0,
     adds,
@@ -365,6 +396,7 @@ export interface CombatActionEvents {
   )[];
   vfx: {
     target: 'player' | 'enemy';
+    targetUid?: string;
     text: string;
     color: string;
     yOffset?: number;
@@ -455,6 +487,7 @@ export function tickBuffsAndCooldowns(
         enemy.currentHp = Math.max(0, enemy.currentHp - burnDmg);
         events.vfx.push({
           target: 'enemy',
+          targetUid: enemy.uid,
           text: `-${burnDmg} BURN`,
           color: '#fb923c',
           burstColor: '#f97316',
@@ -495,6 +528,7 @@ export function checkBossPhaseTransition(
     events.sfx.push('staggerBreak');
     events.vfx.push({
       target: 'enemy',
+      targetUid: enemy.uid,
       text: 'PHASE 2 · BARRIER!',
       color: '#facc15',
       yOffset: -36,
@@ -521,6 +555,7 @@ export function checkBossPhaseTransition(
       battle.adds.push(add);
       events.vfx.push({
         target: 'enemy',
+        targetUid: enemy.uid,
         text: `SUMMONED ${add.name.toUpperCase()}!`,
         color: '#c084fc',
         yOffset: -54,
@@ -557,6 +592,7 @@ export function checkBossPhaseTransition(
     events.sfx.push('ultimate');
     events.vfx.push({
       target: 'enemy',
+      targetUid: enemy.uid,
       text: 'ENRAGED!!',
       color: '#f43f5e',
       yOffset: -44,
@@ -592,7 +628,10 @@ export function executePlayerAction(
   const enemy = getActiveEnemy(battle);
   const pStats = getEffectivePlayerCombatStats(player, battle);
   const weatherFx = getWeatherCombatEffect(battle.zone);
-  const vanguardStaggerMult = player.tier3Branch === 'vanguard' ? 1.3 : 1;
+  const mutatorCritBonus = battle.voidTowerMutator?.id === 'astral_overdrive' ? 25 : 0;
+  const mutatorStaggerMult = battle.voidTowerMutator?.id === 'fractured_space' ? 1.35 : 1;
+  const vanguardStaggerMult =
+    (player.tier3Branch === 'vanguard' ? 1.3 : 1) * mutatorStaggerMult;
   battle.playerGuarding = false;
 
   const usedSkillId = action.kind === 'skill' ? action.skillId : null;
@@ -703,6 +742,7 @@ export function executePlayerAction(
       events.sfx.push('hit', 'comboUp');
       events.vfx.push({
         target: 'enemy',
+        targetUid: enemy.uid,
         text: `-${scaledStagger} STAGGER`,
         color: '#facc15',
         burstColor: '#facc15',
@@ -727,7 +767,7 @@ export function executePlayerAction(
       player.unlockedSkillIds.includes('phy_t2_cascade') && battle.comboCount >= 3;
     const boostedAttacker = {
       ...pStats,
-      critDmg: pStats.critDmg + comboBonuses.critDmgBonus + (hasCascade ? 10 : 0),
+      critDmg: pStats.critDmg + comboBonuses.critDmgBonus + mutatorCritBonus + (hasCascade ? 10 : 0),
     };
     const eStats = getEffectiveEnemyCombatStats(enemy);
     const res = calculateDamage(boostedAttacker, eStats, {
@@ -768,7 +808,7 @@ export function executePlayerAction(
       const finisherAttacker = {
         ...pStats,
         atk: Math.round(pStats.atk + usedDmg * 0.35),
-        critDmg: pStats.critDmg + usedHits * 12,
+        critDmg: pStats.critDmg + usedHits * 12 + mutatorCritBonus,
       };
       const eStats = getEffectiveEnemyCombatStats(enemy);
       const res = calculateDamage(finisherAttacker, eStats, {
@@ -785,6 +825,7 @@ export function executePlayerAction(
         res.damage = Math.max(1, Math.round(res.damage * 0.5));
         events.vfx.push({
           target: 'enemy',
+          targetUid: enemy.uid,
           text: `BARRIER CRACKED (${enemy.shieldHits})`,
           color: '#facc15',
           yOffset: -22,
@@ -797,6 +838,7 @@ export function executePlayerAction(
       events.sfx.push('ultimate', 'crit');
       events.vfx.push({
         target: 'enemy',
+        targetUid: enemy.uid,
         text: `FINISHER ${res.damage}!`,
         color: '#c084fc',
         yOffset: 6,
@@ -843,6 +885,7 @@ export function executePlayerAction(
     events.sfx.push('crit');
     events.vfx.push({
       target: 'enemy',
+      targetUid: enemy.uid,
       text: `EXECUTE ${res.damage}!`,
       color: '#fb923c',
       yOffset: 6,
@@ -1004,7 +1047,7 @@ export function executePlayerAction(
           : pStats;
       const effectiveAttacker = {
         ...baseOffense,
-        critDmg: baseOffense.critDmg + comboBonuses.critDmgBonus + (hasCascade ? 10 : 0),
+        critDmg: baseOffense.critDmg + comboBonuses.critDmgBonus + mutatorCritBonus + (hasCascade ? 10 : 0),
       };
       const scaledStaggerPower = Math.round(
         (skill.staggerPower ?? 30) *
@@ -1087,6 +1130,7 @@ export function executePlayerAction(
           battle.comboDamage += sparkDmg;
           events.vfx.push({
             target: 'enemy',
+            targetUid: enemy.uid,
             text: `RESONANCE +${sparkDmg}`,
             color: '#38bdf8',
             yOffset: -18,
@@ -1134,6 +1178,7 @@ function dealStaggerToEnemy(
     events.sfx.push('staggerBreak');
     events.vfx.push({
       target: 'enemy',
+      targetUid: enemy.uid,
       text: 'STAGGER BREAK!',
       color: '#facc15',
       yOffset: -32,
@@ -1203,7 +1248,7 @@ function applyPlayerDamageResult(
 ) {
   if (res.isDodged) {
     events.sfx.push('dodge');
-    events.vfx.push({ target: 'enemy', text: 'DODGED!', color: '#94a3b8' });
+    events.vfx.push({ target: 'enemy', targetUid: enemy.uid, text: 'DODGED!', color: '#94a3b8' });
     addBattleLog(battle, `${moveName} missed — ${enemy.name} dodged!`, 'miss');
     return;
   }
@@ -1215,6 +1260,7 @@ function applyPlayerDamageResult(
     res.staggerDamage = Math.max(1, Math.round(res.staggerDamage * 0.65));
     events.vfx.push({
       target: 'enemy',
+      targetUid: enemy.uid,
       text: `BARRIER (${enemy.shieldHits} LEFT)`,
       color: '#facc15',
       yOffset: -20,
@@ -1255,6 +1301,7 @@ function applyPlayerDamageResult(
 
   events.vfx.push({
     target: 'enemy',
+    targetUid: enemy.uid,
     text: res.isCrit ? `CRIT ${res.damage}!` : `${res.damage}`,
     color: res.isCrit ? '#facc15' : '#ffffff',
     yOffset: 10,
@@ -1275,6 +1322,7 @@ function applyPlayerDamageResult(
   if (battle.comboCount >= 2) {
     events.vfx.push({
       target: 'enemy',
+      targetUid: enemy.uid,
       text: `${battle.comboCount}x COMBO! ${battle.comboDamage} TOT`,
       color: comboBonuses.tierColor,
       yOffset: -46,
@@ -1380,6 +1428,7 @@ function executePetAssistIfReady(
   events.sfx.push('hit', 'comboUp');
   events.vfx.push({
     target: 'enemy',
+    targetUid: target.uid,
     text: `${pet.name.toUpperCase()} -${res.damage}`,
     color: pet.accent,
     yOffset: -24,
@@ -1696,6 +1745,7 @@ function executeEnemyTurn(
     events.sfx.push('heal');
     events.vfx.push({
       target: 'enemy',
+      targetUid: enemy.uid,
       text: `SUMMONED ${add.name.toUpperCase()}!`,
       color: '#c084fc',
       yOffset: -30,
@@ -1752,7 +1802,11 @@ function executeEnemyTurn(
   // Standard Enemy Attack
   enemy.animState = 'attack';
   enemy.animTimer = 0.36;
-  enemy.ultimateCharge = Math.min(100, enemy.ultimateCharge + (enemy.enraged ? 50 : 35));
+  const nullStaticMult = battle.voidTowerMutator?.id === 'null_static' ? 1.4 : 1;
+  enemy.ultimateCharge = Math.min(
+    100,
+    enemy.ultimateCharge + Math.round((enemy.enraged ? 50 : 35) * nullStaticMult)
+  );
   const dmgType = eStats.matk > eStats.atk ? 'magical' : 'physical';
   const res = calculateDamage(eStats, pStats, {
     damageType: dmgType,
@@ -1870,13 +1924,15 @@ export function resolveQteInput(
     battle.playerAnimTimer = 0.42;
     player.ultimateCharge = Math.min(100, player.ultimateCharge + 24);
     const comboBonuses = getComboBonuses(battle.comboCount);
+    const mutatorCritBonus = battle.voidTowerMutator?.id === 'astral_overdrive' ? 25 : 0;
+    const mutatorStaggerMult = battle.voidTowerMutator?.id === 'fractured_space' ? 1.35 : 1;
     const boostedAttacker = {
       ...pStats,
-      critDmg: pStats.critDmg + comboBonuses.critDmgBonus,
+      critDmg: pStats.critDmg + comboBonuses.critDmgBonus + mutatorCritBonus,
     };
     const eStats = getEffectiveEnemyCombatStats(counterTarget);
     const shadowCounterMult = player.tier3Branch === 'shadowstrider' ? 1.35 : 1;
-    const vanguardStaggerMult = player.tier3Branch === 'vanguard' ? 1.3 : 1;
+    const vanguardStaggerMult = (player.tier3Branch === 'vanguard' ? 1.3 : 1) * mutatorStaggerMult;
     const counterRes = calculateDamage(boostedAttacker, eStats, {
       damageType: 'physical',
       powerMult: 1.65,
@@ -1993,6 +2049,7 @@ function applyDamageToPlayer(
         attacker.currentHp = Math.max(0, attacker.currentHp - thornsDmg);
         events.vfx.push({
           target: 'enemy',
+          targetUid: attacker.uid,
           text: `THORNS -${thornsDmg}`,
           color: '#94a3b8',
           yOffset: 16,

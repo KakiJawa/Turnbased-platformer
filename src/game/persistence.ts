@@ -2,6 +2,13 @@ import { PlayerState } from './types';
 
 export const SAVE_STORAGE_KEY = 'villagers_trial_save_v1';
 
+export interface ZoneEntityProgress {
+  defeatedEntityIds: string[];
+  openedChestIds: string[];
+  collectedPickupIds: string[];
+  usedShrineIds: string[];
+}
+
 export interface SavedRunData {
   version: 1;
   savedAt: number;
@@ -11,6 +18,8 @@ export interface SavedRunData {
   defeatedEntityIds: string[];
   openedChestIds: string[];
   collectedPickupIds: string[];
+  usedShrineIds?: string[];
+  zoneProgress?: Record<number, ZoneEntityProgress>;
 }
 
 export function saveRunState(data: SavedRunData): boolean {

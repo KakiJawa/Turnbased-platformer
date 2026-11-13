@@ -1,4 +1,4 @@
-import { Shield, Sword, Trash2, Wrench, X } from 'lucide-react';
+import { Lock, Shield, Sword, Trash2, Unlock, Wrench, X } from 'lucide-react';
 import { MATERIAL_META, STAT_LABELS } from '../game/data';
 import { RARITY_META } from '../game/palette';
 import {
@@ -19,6 +19,7 @@ interface InventoryModalProps {
   onClose: () => void;
   onEquipItem: (itemId: string) => void;
   onSellItem: (itemId: string) => void;
+  onToggleLockItem: (itemId: string) => void;
   onBulkDispose: (maxRarity: 'common' | 'uncommon', mode: 'sell' | 'salvage') => void;
 }
 
@@ -50,6 +51,7 @@ function ItemCard({
   onAction,
   secondaryLabel,
   onSecondary,
+  onToggleLock,
 }: {
   item: EquipmentItem;
   equippedMatch?: EquipmentItem | null;
@@ -57,6 +59,7 @@ function ItemCard({
   onAction?: () => void;
   secondaryLabel?: string;
   onSecondary?: () => void;
+  onToggleLock?: () => void;
 }) {
   const rMeta = RARITY_META[item.rarity];
   const effStats = getEquipmentEffectiveStats(item);
@@ -68,11 +71,12 @@ function ItemCard({
   return (
     <div
       className="p-2.5 border-2 flex flex-col justify-between gap-2"
-      style={{ backgroundColor: rMeta.bg, borderColor: rMeta.border }}
+      style={{ backgroundColor: rMeta.bg, borderColor: item.locked ? '#f7c948' : rMeta.border }}
     >
       <div>
         <div className="flex items-center justify-between gap-2">
           <span className="font-pixel text-xs" style={{ color: rMeta.color }}>
+            {item.locked ? '★ ' : ''}
             {item.name} {item.level > 0 ? `+${item.level}` : ''}
           </span>
           <span className="text-[10px] font-mono-num uppercase text-[#e6d8bd]">
@@ -114,24 +118,44 @@ function ItemCard({
         )}
       </div>
 
-      {(onAction || onSecondary) && (
-        <div className="flex items-center gap-2 pt-1">
-          {onAction && actionLabel && (
+      {(onAction || onSecondary || onToggleLock) && (
+        <div className="flex items-center justify-between gap-2 pt-1">
+          <div className="flex items-center gap-2">
+            {onAction && actionLabel && (
+              <button
+                type="button"
+                onClick={onAction}
+                className="font-pixel text-[10px] px-2.5 py-1 bg-[#f7c948] text-[#0e0b16] border border-[#0e0b16] hover:bg-[#fde047] cursor-pointer"
+              >
+                {actionLabel}
+              </button>
+            )}
+            {onSecondary && secondaryLabel && (
+              <button
+                type="button"
+                disabled={Boolean(item.locked)}
+                title={item.locked ? 'Unlock item before selling' : 'Sell item for Gold'}
+                onClick={onSecondary}
+                className="font-pixel text-[10px] px-2.5 py-1 bg-[#2d2544] text-[#e6d8bd] border border-[#4b3f6b] hover:border-[#ef4444] disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {item.locked ? 'Locked' : secondaryLabel}
+              </button>
+            )}
+          </div>
+          {onToggleLock && (
             <button
               type="button"
-              onClick={onAction}
-              className="font-pixel text-[10px] px-2.5 py-1 bg-[#f7c948] text-[#0e0b16] border border-[#0e0b16] hover:bg-[#fde047] cursor-pointer"
+              data-testid={`lock-item-${item.id}`}
+              aria-label={item.locked ? `Unlock ${item.name}` : `Lock ${item.name}`}
+              title={item.locked ? 'Locked: protected from selling & salvage' : 'Lock item to protect from selling & salvage'}
+              onClick={onToggleLock}
+              className={`p-1 border cursor-pointer ${
+                item.locked
+                  ? 'bg-[#f7c948]/20 border-[#f7c948] text-[#f7c948]'
+                  : 'bg-[#0e0b16] border-[#4b3f6b] text-[#94a3b8] hover:text-[#f7c948]'
+              }`}
             >
-              {actionLabel}
-            </button>
-          )}
-          {onSecondary && secondaryLabel && (
-            <button
-              type="button"
-              onClick={onSecondary}
-              className="font-pixel text-[10px] px-2.5 py-1 bg-[#2d2544] text-[#e6d8bd] border border-[#4b3f6b] hover:border-[#ef4444] cursor-pointer"
-            >
-              {secondaryLabel}
+              {item.locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
             </button>
           )}
         </div>
@@ -145,12 +169,14 @@ export function InventoryModal({
   onClose,
   onEquipItem,
   onSellItem,
+  onToggleLockItem,
   onBulkDispose,
 }: InventoryModalProps) {
   const stats = computePlayerStats(player);
   const bulkCount = player.inventory.filter(
-    (i) => i.rarity === 'common' || i.rarity === 'uncommon'
+    (i) => !i.locked && (i.rarity === 'common' || i.rarity === 'uncommon')
   ).length;
+  const lockedCount = player.inventory.filter((i) => i.locked).length;
 
   return (
     <div className="fixed inset-0 z-30 bg-black/75 flex items-center justify-center p-4">
@@ -226,9 +252,16 @@ export function InventoryModal({
           <div className="lg:col-span-7 flex flex-col gap-4">
             <div>
               <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                <h3 className="font-pixel text-xs text-[#e6d8bd]">
-                  Equipment Bag ({player.inventory.length} items)
-                </h3>
+                <div>
+                  <h3 className="font-pixel text-xs text-[#e6d8bd]">
+                    Equipment Bag ({player.inventory.length} items)
+                  </h3>
+                  {lockedCount > 0 && (
+                    <div className="text-[10px] font-mono-num text-[#f7c948]">
+                      {lockedCount} locked item{lockedCount === 1 ? '' : 's'} kept safe
+                    </div>
+                  )}
+                </div>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
@@ -268,6 +301,7 @@ export function InventoryModal({
                       onAction={() => onEquipItem(item.id)}
                       secondaryLabel={`Sell (${item.sellValue}G)`}
                       onSecondary={() => onSellItem(item.id)}
+                      onToggleLock={() => onToggleLockItem(item.id)}
                     />
                   ))}
                 </div>
