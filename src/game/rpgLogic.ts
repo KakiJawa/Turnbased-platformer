@@ -890,6 +890,7 @@ export function calculateDamage(
     defenderIsStaggered: boolean;
     defenderIsGuarding?: boolean;
     bonusCrit?: number;
+    damageMult?: number;
     forceCrit?: boolean;
     allowDodge?: boolean;
     rng?: () => number;
@@ -933,6 +934,10 @@ export function calculateDamage(
 
   if (options.defenderIsStaggered) {
     damage *= 1.5; // Staggered targets take 150% damage!
+  }
+
+  if (options.damageMult !== undefined && options.damageMult !== 1) {
+    damage *= options.damageMult;
   }
 
   const staggerDamage = options.defenderIsStaggered

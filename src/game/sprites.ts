@@ -25,67 +25,30 @@ export interface SpriteDrawOptions {
   walkCycle?: number;
 }
 
-export function drawActorSprite(
+let hitScratchCanvas: HTMLCanvasElement | null = null;
+function getHitScratchCanvas(): {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+} | null {
+  if (typeof document === 'undefined') return null;
+  if (!hitScratchCanvas) {
+    hitScratchCanvas = document.createElement('canvas');
+    hitScratchCanvas.width = 96;
+    hitScratchCanvas.height = 96;
+  }
+  const sctx = hitScratchCanvas.getContext('2d');
+  if (!sctx) return null;
+  sctx.imageSmoothingEnabled = false;
+  return { canvas: hitScratchCanvas, ctx: sctx };
+}
+
+function drawSpriteShape(
   ctx: CanvasRenderingContext2D,
-  opts: SpriteDrawOptions
+  sprite: SpriteId,
+  animState: ActorAnimState,
+  time: number,
+  walkCycle: number
 ) {
-  const {
-    x,
-    y,
-    sprite,
-    animState,
-    time,
-    facing = 1,
-    scale = 1,
-    walkCycle = 0,
-  } = opts;
-
-  ctx.save();
-  ctx.translate(Math.round(x), Math.round(y));
-
-  // Pose transforms per 5 required states: idle, attack, hit, staggered, death
-  let offsetX = 0;
-  let offsetY = 0;
-  let rot = 0;
-  let sx = facing * scale;
-  let sy = scale;
-  let hitFlash = false;
-
-  if (animState === 'idle') {
-    const bob = Math.sin(time * 4.5) > 0 ? -1 : 0;
-    const walkBob = walkCycle > 0 ? Math.abs(Math.sin(walkCycle * 0.28)) * -3 : 0;
-    offsetY = bob + walkBob;
-  } else if (animState === 'attack') {
-    offsetX = facing * 9 * scale;
-    offsetY = -2 * scale;
-    sx = facing * scale * 1.12;
-    sy = scale * 0.92;
-  } else if (animState === 'hit') {
-    offsetX = -facing * 6 * scale;
-    offsetY = -1 * scale;
-    sx = facing * scale * 0.88;
-    sy = scale * 1.1;
-    hitFlash = Math.floor(time * 24) % 2 === 0;
-  } else if (animState === 'staggered') {
-    offsetX = Math.sin(time * 26) * 2 * scale;
-    rot = -facing * 0.22;
-    sy = scale * 0.85;
-  } else if (animState === 'death') {
-    rot = -facing * 1.48;
-    offsetY = -4 * scale;
-    ctx.globalAlpha = 0.65;
-  }
-
-  ctx.translate(Math.round(offsetX), Math.round(offsetY));
-  if (rot !== 0) ctx.rotate(rot);
-  ctx.scale(sx, sy);
-
-  // Ground shadow
-  if (animState !== 'death') {
-    ctx.fillStyle = 'rgba(14, 11, 22, 0.45)';
-    ctx.fillRect(-10, -2, 20, 3);
-  }
-
   switch (sprite) {
     case 'villager':
       drawVillagerPixels(ctx, animState, time, walkCycle);
@@ -128,12 +91,105 @@ export function drawActorSprite(
       drawDragonFamilyPixels(ctx, sprite, animState, time);
       break;
   }
+}
 
-  // Hit white flash overlay
-  if (hitFlash) {
-    ctx.globalCompositeOperation = 'source-atop';
-    ctx.fillStyle = 'rgba(255,255,255,0.72)';
-    ctx.fillRect(-24, -40, 48, 44);
+export function drawActorSprite(
+  ctx: CanvasRenderingContext2D,
+  opts: SpriteDrawOptions
+) {
+  const {
+    x,
+    y,
+    sprite,
+    animState,
+    time,
+    facing = 1,
+    scale = 1,
+    walkCycle = 0,
+  } = opts;
+
+  ctx.save();
+  ctx.translate(Math.round(x), Math.round(y));
+
+  // Pose transforms per 5 required states: idle, attack, hit, staggered, death
+  let offsetX = 0;
+  let offsetY = 0;
+  let rot = 0;
+  let sx = facing * scale;
+  let sy = scale;
+  let hitFlash = false;
+
+  if (animState === 'idle') {
+    const bob = Math.sin(time * 4.5) > 0 ? -1 : 0;
+    const walkBob = walkCycle > 0 ? Math.abs(Math.sin(walkCycle * 0.28)) * -3 : 0;
+    offsetY = bob + walkBob;
+  } else if (animState === 'attack') {
+    offsetX = facing * 9 * scale;
+    offsetY = -2 * scale;
+    sx = facing * scale * 1.12;
+    sy = scale * 0.92;
+  } else if (animState === 'hit') {
+    offsetX = -facing * 6 * scale + Math.round(Math.sin(time * 55) * 1.5);
+    offsetY = -1 * scale;
+    sx = facing * scale * 0.9;
+    sy = scale * 1.08;
+    hitFlash = Math.floor(time * 24) % 2 === 0;
+  } else if (animState === 'staggered') {
+    offsetX = Math.sin(time * 26) * 2 * scale;
+    rot = -facing * 0.22;
+    sy = scale * 0.85;
+  } else if (animState === 'death') {
+    rot = -facing * 1.48;
+    offsetY = -4 * scale;
+    ctx.globalAlpha = 0.65;
+  }
+
+  ctx.translate(Math.round(offsetX), Math.round(offsetY));
+  if (rot !== 0) ctx.rotate(rot);
+  ctx.scale(sx, sy);
+
+  // Ground shadow
+  if (animState !== 'death') {
+    ctx.fillStyle = 'rgba(14, 11, 22, 0.45)';
+    ctx.fillRect(-10, -2, 20, 3);
+  }
+
+  const scratch = hitFlash ? getHitScratchCanvas() : null;
+  if (hitFlash && scratch) {
+    const { canvas: sc, ctx: sctx } = scratch;
+    sctx.save();
+    sctx.setTransform(1, 0, 0, 1, 0, 0);
+    sctx.clearRect(0, 0, sc.width, sc.height);
+    sctx.translate(48, 80);
+    drawSpriteShape(sctx, sprite, animState, time, walkCycle);
+    // Tint strictly the sprite's silhouette (never a background square!)
+    sctx.globalCompositeOperation = 'source-atop';
+    sctx.fillStyle =
+      Math.floor(time * 48) % 2 === 0
+        ? 'rgba(255, 232, 163, 0.78)'
+        : 'rgba(239, 68, 68, 0.65)';
+    sctx.fillRect(-48, -80, sc.width, sc.height);
+    sctx.restore();
+
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(sc, -48, -80);
+  } else {
+    drawSpriteShape(ctx, sprite, animState, time, walkCycle);
+  }
+
+  // Crisp 16-bit pixel slash cut & impact sparks across target when hit
+  if (animState === 'hit') {
+    const slashPhase = (time * 18) % 1;
+    const steps = 10;
+    for (let i = 0; i < steps; i++) {
+      const t = i / steps;
+      const sxp = Math.round(-12 + t * 24);
+      const syp = Math.round(-6 - t * 18);
+      pxRect(ctx, sxp, syp, 3, 2, slashPhase < 0.5 ? '#ffffff' : '#f7c948');
+      pxRect(ctx, sxp - 1, syp + 1, 2, 1, '#ef4444');
+    }
+    pxRect(ctx, -13, -15, 2, 2, '#facc15');
+    pxRect(ctx, 11, -18, 2, 2, '#ffffff');
   }
 
   ctx.restore();

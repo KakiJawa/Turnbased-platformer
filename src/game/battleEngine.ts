@@ -18,7 +18,15 @@ import {
   MaterialId,
   PlayerState,
   QteState,
+  Stats,
 } from './types';
+import {
+  applyWeatherStatModifiers,
+  getWeatherCombatEffect,
+  getWeatherFireDamageMultiplier,
+  isFireEnemySprite,
+  isFireSkillId,
+} from './weather';
 
 export type BattlePhase =
   | 'player_turn'
@@ -32,8 +40,9 @@ export type BattlePhase =
 
 export interface BattleLogEntry {
   id: number;
+  turn?: number;
   text: string;
-  tone: 'info' | 'hit' | 'crit' | 'stagger' | 'heal' | 'enemy';
+  tone: 'info' | 'hit' | 'crit' | 'stagger' | 'heal' | 'enemy' | 'miss';
 }
 
 export interface BattleRewards {
@@ -161,7 +170,14 @@ export function createBattleState(
     logs: [
       {
         id: logSeq++,
+        turn: 1,
         text: `Wave 1/${wave.length}: ${first.name} steps forward!`,
+        tone: 'info',
+      },
+      {
+        id: logSeq++,
+        turn: 1,
+        text: `Weather: ${getWeatherCombatEffect(zone).name} (${getWeatherCombatEffect(zone).shortEffect})`,
         tone: 'info',
       },
     ],
@@ -186,11 +202,24 @@ export function addBattleLog(
   text: string,
   tone: BattleLogEntry['tone'] = 'info'
 ) {
-  battle.logs = [{ id: logSeq++, text, tone }, ...battle.logs].slice(0, 6);
+  battle.logs = [
+    { id: logSeq++, turn: battle.turnCount, text, tone },
+    ...battle.logs,
+  ].slice(0, 40);
 }
 
 export function getActiveEnemy(battle: BattleState): CombatEnemy {
   return battle.wave[battle.waveIndex];
+}
+
+export function getEffectivePlayerCombatStats(
+  player: PlayerState,
+  battle: Pick<BattleState, 'zone' | 'playerBuffs'>
+): Stats {
+  return applyWeatherStatModifiers(
+    computePlayerStats(player, battle.playerBuffs),
+    battle.zone
+  );
 }
 
 export interface CombatActionEvents {
@@ -242,8 +271,39 @@ export function tickBuffsAndCooldowns(
   player: PlayerState,
   events: CombatActionEvents
 ) {
-  // Tick player buffs (regen, etc.)
-  const pStats = computePlayerStats(player, battle.playerBuffs);
+  // Tick player buffs (regen, etc.) + Weather passive turn effects
+  const pStats = getEffectivePlayerCombatStats(player, battle);
+  const weatherFx = getWeatherCombatEffect(battle.zone);
+  const fireMult = getWeatherFireDamageMultiplier(battle.zone);
+
+  if (weatherFx.mpRegenPerTurn > 0 && player.currentMp < pStats.mp) {
+    const beforeMp = player.currentMp;
+    player.currentMp = Math.min(pStats.mp, player.currentMp + weatherFx.mpRegenPerTurn);
+    const gainedMp = Math.round(player.currentMp - beforeMp);
+    if (gainedMp > 0) {
+      events.vfx.push({
+        target: 'player',
+        text: `+${gainedMp} MP (${weatherFx.name.toUpperCase()})`,
+        color: '#38bdf8',
+        yOffset: -24,
+      });
+    }
+  }
+
+  if (weatherFx.hpRegenPerTurn > 0 && player.currentHp < pStats.hp) {
+    const beforeHp = player.currentHp;
+    player.currentHp = Math.min(pStats.hp, player.currentHp + weatherFx.hpRegenPerTurn);
+    const gainedHp = Math.round(player.currentHp - beforeHp);
+    if (gainedHp > 0) {
+      events.vfx.push({
+        target: 'player',
+        text: `+${gainedHp} HP (${weatherFx.name.toUpperCase()})`,
+        color: '#4ade80',
+        yOffset: -10,
+      });
+    }
+  }
+
   const nextPlayerBuffs: ActiveBuff[] = [];
   for (const b of battle.playerBuffs) {
     if (b.type === 'regen') {
@@ -261,13 +321,14 @@ export function tickBuffsAndCooldowns(
   }
   battle.playerBuffs = nextPlayerBuffs;
 
-  // Tick enemy buffs (burn)
+  // Tick enemy buffs (burn scaled by weather fire resistance!)
   const enemy = getActiveEnemy(battle);
   if (enemy && enemy.currentHp > 0) {
     const nextEnemyBuffs: ActiveBuff[] = [];
     for (const b of enemy.buffs) {
       if (b.type === 'burn') {
-        const burnDmg = Math.max(4, Math.round((enemy.stats.hp * b.potency) / 200));
+        const baseBurn = Math.max(4, Math.round((enemy.stats.hp * b.potency) / 200));
+        const burnDmg = Math.max(2, Math.round(baseBurn * fireMult));
         enemy.currentHp = Math.max(0, enemy.currentHp - burnDmg);
         events.vfx.push({
           target: 'enemy',
@@ -276,6 +337,7 @@ export function tickBuffsAndCooldowns(
           burstColor: '#f97316',
           burstCount: 6,
         });
+        addBattleLog(battle, `${enemy.name} took ${burnDmg} Burn damage!`, 'hit');
       }
       if (b.turns - 1 > 0) {
         nextEnemyBuffs.push({ ...b, turns: b.turns - 1 });
@@ -300,7 +362,8 @@ export function executePlayerAction(
   if (battle.phase !== 'player_turn') return events;
 
   const enemy = getActiveEnemy(battle);
-  const pStats = computePlayerStats(player, battle.playerBuffs);
+  const pStats = getEffectivePlayerCombatStats(player, battle);
+  const weatherFx = getWeatherCombatEffect(battle.zone);
   battle.playerGuarding = false;
 
   // Tick existing skill cooldowns when taking a turn action (excluding any skill cast this turn)
@@ -411,7 +474,7 @@ export function executePlayerAction(
     const res = calculateDamage(boostedAttacker, enemy.stats, {
       damageType: 'physical',
       powerMult: 1.0,
-      staggerPower: Math.round(24 * comboBonuses.staggerMult),
+      staggerPower: Math.round(24 * comboBonuses.staggerMult * weatherFx.staggerMult),
       defenderIsStaggered: enemy.staggeredTurns > 0,
     });
     applyPlayerDamageResult(battle, player, enemy, 'Basic Strike', res, events);
@@ -438,7 +501,7 @@ export function executePlayerAction(
       const res = calculateDamage(finisherAttacker, enemy.stats, {
         damageType: 'physical',
         powerMult: 1.55 + usedHits * 0.14,
-        staggerPower: 55 + usedHits * 6,
+        staggerPower: Math.round((55 + usedHits * 6) * weatherFx.staggerMult),
         defenderIsStaggered: enemy.staggeredTurns > 0,
         forceCrit: true,
         allowDodge: false,
@@ -592,6 +655,9 @@ export function executePlayerAction(
           color: '#38bdf8',
           ringColor: '#38bdf8',
         });
+        if (skill.damageType === 'buff') {
+          addBattleLog(battle, `${player.name} activated ${skill.name} (${b.label})!`, 'heal');
+        }
       } else {
         enemy.buffs = applyBuffToList(enemy.buffs, {
           type: b.type,
@@ -619,14 +685,19 @@ export function executePlayerAction(
         critDmg: baseOffense.critDmg + comboBonuses.critDmgBonus,
       };
       const scaledStaggerPower = Math.round(
-        (skill.staggerPower ?? 30) * comboBonuses.staggerMult
+        (skill.staggerPower ?? 30) * comboBonuses.staggerMult * weatherFx.staggerMult
       );
+      let weatherDmgMult = skill.damageType === 'magical' ? weatherFx.magicDmgMult : 1;
+      if (isFireSkillId(skill.id)) {
+        weatherDmgMult *= getWeatherFireDamageMultiplier(battle.zone);
+      }
       const res = calculateDamage(effectiveAttacker, enemy.stats, {
         damageType: skill.damageType === 'magical' ? 'magical' : 'physical',
         powerMult: skill.powerMult ?? 1.3,
         staggerPower: scaledStaggerPower,
         defenderIsStaggered: enemy.staggeredTurns > 0,
         bonusCrit: skill.passiveTag === 'high_crit' ? 25 : 0,
+        damageMult: weatherDmgMult,
       });
       applyPlayerDamageResult(
         battle,
@@ -738,7 +809,7 @@ function applyPlayerDamageResult(
   if (res.isDodged) {
     events.sfx.push('dodge');
     events.vfx.push({ target: 'enemy', text: 'DODGED!', color: '#94a3b8' });
-    addBattleLog(battle, `${enemy.name} dodged ${moveName}!`, 'info');
+    addBattleLog(battle, `${moveName} missed — ${enemy.name} dodged!`, 'miss');
     return;
   }
 
@@ -805,7 +876,7 @@ function applyPlayerDamageResult(
     res.isCrit ? 'crit' : 'hit'
   );
 
-  const pStats = computePlayerStats(player, battle.playerBuffs);
+  const pStats = getEffectivePlayerCombatStats(player, battle);
   applyPassiveProcsOnHit(battle, player, pStats, res, events);
 
   if (enemy.currentHp > 0) {
@@ -987,7 +1058,10 @@ function executeEnemyTurn(
     }
   }
 
-  const pStats = computePlayerStats(player, battle.playerBuffs);
+  const pStats = getEffectivePlayerCombatStats(player, battle);
+  const enemyFireMult = isFireEnemySprite(enemy.sprite)
+    ? getWeatherFireDamageMultiplier(battle.zone)
+    : 1;
   const isSpecial = battle.pendingEnemyAction === 'special';
 
   if (isSpecial) {
@@ -999,6 +1073,7 @@ function executeEnemyTurn(
       staggerPower: enemy.specialStagger,
       defenderIsStaggered: false,
       defenderIsGuarding: battle.playerGuarding,
+      damageMult: enemyFireMult,
       allowDodge: false,
     });
     battle.phase = 'qte_dodge';
@@ -1036,6 +1111,7 @@ function executeEnemyTurn(
     staggerPower: 18,
     defenderIsStaggered: false,
     defenderIsGuarding: battle.playerGuarding,
+    damageMult: enemyFireMult,
   });
 
   applyDamageToPlayer(battle, player, enemy.name, 'Attack', res, events);
@@ -1066,7 +1142,8 @@ export function resolveQteInput(
   }
   const qte = battle.qte;
   const enemy = getActiveEnemy(battle);
-  const pStats = computePlayerStats(player, battle.playerBuffs);
+  const pStats = getEffectivePlayerCombatStats(player, battle);
+  const weatherFx = getWeatherCombatEffect(battle.zone);
   const insideZone =
     !timedOut && qte.cursor >= qte.zoneStart && qte.cursor <= qte.zoneEnd;
 
@@ -1168,7 +1245,7 @@ export function resolveQteInput(
     const counterRes = calculateDamage(boostedAttacker, enemy.stats, {
       damageType: 'physical',
       powerMult: 1.65,
-      staggerPower: Math.round(48 * comboBonuses.staggerMult),
+      staggerPower: Math.round(48 * comboBonuses.staggerMult * weatherFx.staggerMult),
       defenderIsStaggered: enemy.staggeredTurns > 0,
       forceCrit: true,
       allowDodge: false,
@@ -1180,7 +1257,7 @@ export function resolveQteInput(
       return events;
     }
   } else {
-    addBattleLog(battle, 'Counter-Attack missed the timing window.', 'info');
+    addBattleLog(battle, 'Counter-Attack missed the timing window.', 'miss');
   }
 
   tickBuffsAndCooldowns(battle, player, events);
@@ -1229,7 +1306,11 @@ function applyDamageToPlayer(
         yOffset: -18,
       });
     }
-    addBattleLog(battle, `${player.name} nimbly dodged ${attackerName}!`, 'info');
+    addBattleLog(
+      battle,
+      `${attackerName}'s ${moveName} missed — ${player.name} dodged!`,
+      'miss'
+    );
     return;
   }
 
@@ -1254,7 +1335,7 @@ function applyDamageToPlayer(
   ) {
     const enemy = getActiveEnemy(battle);
     if (enemy && enemy.currentHp > 0) {
-      const pStats = computePlayerStats(player, battle.playerBuffs);
+      const pStats = getEffectivePlayerCombatStats(player, battle);
       const mult = player.unlockedSkillIds.includes('def_t2_bulwark') ? 0.55 : 0.3;
       const thornsDmg = Math.max(4, Math.round(pStats.def * mult));
       enemy.currentHp = Math.max(0, enemy.currentHp - thornsDmg);

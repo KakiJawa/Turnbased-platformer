@@ -306,6 +306,7 @@ test('In-battle passive procs trigger Mana Flow, Harvest, Thorns, and Shadow Ste
   enemy.currentHp = 9999;
   enemy.maxStagger = 9999;
   enemy.currentStagger = 9999;
+  enemy.stats.dodge = 0;
   const battle = createBattleState(1, 'elite', 'z1_en_3', [enemy]);
 
   // Mana Flow refunds part of Pitchfork Thrust (8 MP cost -> net spend < 8)
@@ -359,4 +360,53 @@ test('In-battle passive procs trigger Mana Flow, Harvest, Thorns, and Shadow Ste
   assert.ok(dodgeEv.vfx.some((v) => v.text.includes('SHADOW STEP')));
   assert.ok(player.ultimateCharge >= 12);
   assert.ok(battle.playerBuffs.some((b) => b.type === 'spd_up'));
+});
+
+test('Combat log records turn-stamped scrolling history (>6 entries) including crits and missed/dodged attacks', () => {
+  const player = createInitialPlayer();
+  const enemy = spawnEnemyFromTemplate('farm_cow_elite');
+  enemy.stats.hp = 9999;
+  enemy.currentHp = 9999;
+  enemy.stats.dodge = 100; // Force dodge -> 'miss' tone when player attacks
+  const battle = createBattleState(1, 'elite', 'z1_en_log', [enemy]);
+
+  // 1) Dodged player attack logs with 'miss' tone
+  executePlayerAction(battle, player, { kind: 'attack' });
+  assert.equal(battle.logs[0].tone, 'miss');
+  assert.equal(battle.logs[0].turn, 1);
+  assert.ok(battle.logs[0].text.toLowerCase().includes('missed'));
+
+  // 2) Missed Counter-Attack QTE logs with 'miss' tone
+  battle.phase = 'qte_counter';
+  battle.qte = {
+    active: true,
+    phase: 'counter',
+    promptLabel: 'COUNTER!',
+    cursor: 0.05,
+    speed: 1,
+    direction: 1,
+    zoneStart: 0.38,
+    zoneEnd: 0.62,
+    result: 'pending',
+    resultTimer: 2,
+    pendingEnemyDamage: 10,
+    pendingEnemyStagger: 10,
+    pendingMoveName: 'Horn',
+  };
+  resolveQteInput(battle, player, false);
+  assert.equal(battle.logs[0].tone, 'miss');
+  assert.ok(battle.logs[0].text.toLowerCase().includes('missed'));
+
+  // 3) Guaranteed crit counter logs with 'crit' tone and history exceeds 6 entries
+  enemy.stats.dodge = 0;
+  for (let i = 0; i < 8; i++) {
+    battle.phase = 'player_turn';
+    executePlayerAction(battle, player, { kind: 'guard' });
+  }
+  battle.phase = 'qte_counter';
+  battle.qte.cursor = 0.5;
+  battle.qte.active = true;
+  resolveQteInput(battle, player, false);
+  assert.ok(battle.logs.some((l) => l.tone === 'crit'));
+  assert.ok(battle.logs.length > 6 && battle.logs.length <= 40);
 });

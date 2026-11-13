@@ -1,9 +1,95 @@
 export type MusicMood = 'none' | 'title' | 'explore' | 'battle' | 'boss';
 
+export type BattleIntensity = 'standard' | 'heated' | 'critical';
+
+export interface PercussionStep {
+  kick: boolean;
+  snare: boolean;
+  hihat: boolean;
+}
+
+export function getBattleIntensityFromHpRatio(hpRatio: number): BattleIntensity {
+  const clamped = Math.max(0, Math.min(1, hpRatio));
+  if (clamped <= 0.3) return 'critical';
+  if (clamped <= 0.6) return 'heated';
+  return 'standard';
+}
+
+export function getBattleIntervalMs(
+  mood: MusicMood,
+  intensity: BattleIntensity
+): number {
+  if (mood === 'boss') {
+    if (intensity === 'critical') return 108;
+    if (intensity === 'heated') return 128;
+    return 148;
+  }
+  if (mood === 'battle') {
+    if (intensity === 'critical') return 124;
+    if (intensity === 'heated') return 148;
+    return 175;
+  }
+  return 230;
+}
+
+export function getPercussionPatternForStep(
+  mood: 'battle' | 'boss',
+  intensity: BattleIntensity,
+  step: number
+): PercussionStep {
+  const s = ((step % 16) + 16) % 16;
+
+  if (mood === 'battle') {
+    if (intensity === 'standard') {
+      return {
+        kick: s === 0 || s === 8,
+        snare: s === 4 || s === 12,
+        hihat: false,
+      };
+    }
+    if (intensity === 'heated') {
+      return {
+        kick: s === 0 || s === 6 || s === 8 || s === 10,
+        snare: s === 4 || s === 12,
+        hihat: s === 2 || s === 6 || s === 10 || s === 14,
+      };
+    }
+    // critical (<= 30% HP): driving kick, snare fill, rapid off-beat hi-hats
+    return {
+      kick: s === 0 || s === 3 || s === 6 || s === 8 || s === 10 || s === 14,
+      snare: s === 4 || s === 12 || s === 15,
+      hihat: s % 2 === 1,
+    };
+  }
+
+  // Boss patterns
+  if (intensity === 'standard') {
+    return {
+      kick: s === 0 || s === 4 || s === 8 || s === 12,
+      snare: s === 2 || s === 6 || s === 10 || s === 14,
+      hihat: false,
+    };
+  }
+  if (intensity === 'heated') {
+    return {
+      kick: s === 0 || s === 3 || s === 6 || s === 8 || s === 11 || s === 14,
+      snare: s === 4 || s === 12,
+      hihat: s === 2 || s === 6 || s === 10 || s === 14 || s === 15,
+    };
+  }
+  // Boss critical (<= 30% HP): relentless double-kick & heavy snare/hi-hat barrage
+  return {
+    kick: s % 2 === 0,
+    snare: s === 4 || s === 12 || s === 13 || s === 15,
+    hihat: s % 2 === 1,
+  };
+}
+
 class ChiptuneAudio {
   private ctx: AudioContext | null = null;
   private muted = false;
   private mood: MusicMood = 'none';
+  private battleIntensity: BattleIntensity = 'standard';
   private step = 0;
   private timer: number | null = null;
   private paused = false;
@@ -32,6 +118,10 @@ class ChiptuneAudio {
     return this.muted;
   }
 
+  public getBattleIntensity(): BattleIntensity {
+    return this.battleIntensity;
+  }
+
   public setMuted(mute: boolean) {
     this.muted = mute;
     if (mute) {
@@ -53,10 +143,39 @@ class ChiptuneAudio {
   public setMood(mood: MusicMood) {
     if (this.mood === mood) return;
     this.mood = mood;
+    if (mood !== 'battle' && mood !== 'boss') {
+      this.battleIntensity = 'standard';
+    }
     this.step = 0;
     this.stopMusicTimer();
     if (mood !== 'none' && !this.muted && !this.paused) {
       this.startMusicTimer();
+    }
+  }
+
+  public setBattleEnemyHpRatio(hpRatio: number) {
+    const next = getBattleIntensityFromHpRatio(hpRatio);
+    if (next === this.battleIntensity) return;
+    const prev = this.battleIntensity;
+    this.battleIntensity = next;
+
+    if (
+      (this.mood === 'battle' || this.mood === 'boss') &&
+      !this.muted &&
+      !this.paused
+    ) {
+      // Seamlessly update tempo without resetting current bar step
+      this.startMusicTimer();
+      // Accentuate escalation into heated/critical phase with a quick drum fill
+      if (
+        (prev === 'standard' && (next === 'heated' || next === 'critical')) ||
+        (prev === 'heated' && next === 'critical')
+      ) {
+        this.playDrumSnare(next === 'critical' ? 0.045 : 0.032);
+        if (next === 'critical') {
+          this.tone(587.33, 0.07, 'square', 0.025, 880, 0.05);
+        }
+      }
     }
   }
 
@@ -70,8 +189,7 @@ class ChiptuneAudio {
   private startMusicTimer() {
     this.stopMusicTimer();
     if (typeof window === 'undefined') return;
-    const intervalMs =
-      this.mood === 'boss' ? 145 : this.mood === 'battle' ? 175 : 230;
+    const intervalMs = getBattleIntervalMs(this.mood, this.battleIntensity);
     this.timer = window.setInterval(() => {
       if (this.muted || this.paused) return;
       this.tickMusic();
@@ -123,6 +241,19 @@ class ChiptuneAudio {
     src.start(ctx.currentTime + delay);
   }
 
+  private playDrumKick(vol = 0.042) {
+    this.tone(118, 0.08, 'triangle', vol, 36);
+  }
+
+  private playDrumSnare(vol = 0.026) {
+    this.noiseBurst(0.055, vol);
+    this.tone(185, 0.045, 'triangle', vol * 0.65, 92);
+  }
+
+  private playDrumHiHat(vol = 0.016) {
+    this.noiseBurst(0.022, vol);
+  }
+
   private tickMusic() {
     if (!this.ctx || this.ctx.state !== 'running') return;
     const s = this.step++;
@@ -148,22 +279,54 @@ class ChiptuneAudio {
     }
 
     if (this.mood === 'battle') {
+      const intensity = this.battleIntensity;
       const lead = [440, 523.25, 587.33, 659.25, 587.33, 523.25, 493.88, 523.25, 440, 440, 659.25, 587.33, 523.25, 493.88, 440, 392];
       const bass = [110, 110, 146.83, 164.81, 130.81, 130.81, 123.47, 164.81];
       const n = lead[s % lead.length];
       const b = bass[Math.floor(s / 2) % bass.length];
-      this.tone(n, 0.11, 'square', 0.022);
-      this.tone(b, 0.13, 'triangle', 0.03);
-      if (s % 4 === 2) this.noiseBurst(0.04, 0.018);
+
+      this.tone(
+        n,
+        intensity === 'critical' ? 0.095 : 0.11,
+        intensity === 'critical' ? 'sawtooth' : 'square',
+        intensity === 'standard' ? 0.022 : 0.025
+      );
+      this.tone(b, 0.12, 'triangle', intensity === 'critical' ? 0.036 : 0.03);
+
+      // Layer urgency harmony at heated / critical HP stages
+      if (intensity === 'heated' && s % 2 === 0) {
+        this.tone(n * 1.5, 0.08, 'triangle', 0.012);
+      } else if (intensity === 'critical') {
+        this.tone(n * 1.5, 0.08, 'square', 0.014);
+      }
+
+      const drums = getPercussionPatternForStep('battle', intensity, s);
+      if (drums.kick) this.playDrumKick(intensity === 'critical' ? 0.05 : 0.038);
+      if (drums.snare) this.playDrumSnare(intensity === 'critical' ? 0.034 : 0.024);
+      if (drums.hihat) this.playDrumHiHat(intensity === 'critical' ? 0.02 : 0.014);
       return;
     }
 
     if (this.mood === 'boss') {
+      const intensity = this.battleIntensity;
       const lead = [220, 261.63, 311.13, 293.66, 220, 349.23, 329.63, 261.63, 246.94, 293.66, 392, 349.23, 329.63, 311.13, 293.66, 246.94];
       const bass = [82.41, 82.41, 98, 110, 87.31, 87.31, 103.83, 98];
-      this.tone(lead[s % lead.length] * 2, 0.1, 'sawtooth', 0.022);
-      this.tone(bass[s % bass.length], 0.11, 'square', 0.024);
-      if (s % 2 === 1) this.noiseBurst(0.045, 0.025);
+      const n = lead[s % lead.length] * 2;
+      const b = bass[s % bass.length];
+
+      this.tone(n, 0.095, 'sawtooth', intensity === 'critical' ? 0.026 : 0.022);
+      this.tone(b, 0.105, 'square', intensity === 'critical' ? 0.03 : 0.024);
+
+      if (intensity === 'heated' && s % 2 === 0) {
+        this.tone(n * 0.75, 0.08, 'square', 0.012);
+      } else if (intensity === 'critical') {
+        this.tone(n * 1.5, 0.075, 'square', 0.015);
+      }
+
+      const drums = getPercussionPatternForStep('boss', intensity, s);
+      if (drums.kick) this.playDrumKick(intensity === 'critical' ? 0.056 : 0.044);
+      if (drums.snare) this.playDrumSnare(intensity === 'critical' ? 0.038 : 0.028);
+      if (drums.hihat) this.playDrumHiHat(intensity === 'critical' ? 0.024 : 0.016);
     }
   }
 
@@ -282,6 +445,26 @@ class ChiptuneAudio {
   public playComboBreak() {
     this.tone(240, 0.08, 'sawtooth', 0.055, 130);
     this.tone(160, 0.12, 'sawtooth', 0.055, 90, 0.06);
+  }
+
+  public playEncounter(rarity: 'normal' | 'elite' | 'boss') {
+    if (rarity === 'boss') {
+      this.noiseBurst(0.24, 0.14);
+      this.tone(110, 0.3, 'sawtooth', 0.08, 75);
+      const fanfare = [220, 311.13, 293.66, 440, 622.25];
+      fanfare.forEach((f, i) =>
+        this.tone(f, 0.16, 'sawtooth', 0.06, f * 1.03, i * 0.11)
+      );
+      return;
+    }
+    this.noiseBurst(0.11, 0.1);
+    const notes =
+      rarity === 'elite'
+        ? [523.25, 622.25, 783.99, 1046.5, 1244.5]
+        : [523.25, 659.25, 783.99, 1046.5];
+    notes.forEach((f, i) =>
+      this.tone(f, 0.085, 'square', 0.055, f * 1.06, i * 0.045)
+    );
   }
 }
 

@@ -1,29 +1,40 @@
+import { useEffect, useRef, useState } from 'react';
 import {
+  ChevronDown,
+  ChevronUp,
+  CloudRain,
   Crosshair,
   Eye,
   Flame,
   Heart,
   Package,
+  ScrollText,
   Shield,
+  Snowflake,
   Sparkles,
+  Sun,
   Sword,
   Volume2,
   VolumeX,
+  Wind,
   X,
   Zap,
 } from 'lucide-react';
 import {
+  BattleLogEntry,
   BattleState,
   canUseComboFinisher,
   canUseStaggerExecute,
   getActiveEnemy,
   getComboBonuses,
+  getEffectivePlayerCombatStats,
   getEquippedSkillsList,
   getUnlockedConsumables,
 } from '../game/battleEngine';
 import { BRANCH_META, STAT_LABELS } from '../game/data';
-import { computePlayerStats, getSkillById } from '../game/rpgLogic';
+import { getSkillById } from '../game/rpgLogic';
 import { PlayerState, StatKey } from '../game/types';
+import { getWeatherCombatEffect, getZoneWeatherProfile } from '../game/weather';
 
 interface BattleHudProps {
   player: PlayerState;
@@ -60,6 +71,19 @@ const STAT_KEYS: StatKey[] = [
   'speed',
 ];
 
+const LOG_TONE_META: Record<
+  BattleLogEntry['tone'],
+  { tag: string; color: string; textColor: string }
+> = {
+  crit: { tag: 'CRIT', color: '#facc15', textColor: '#fef08a' },
+  hit: { tag: 'HIT', color: '#e2e8f0', textColor: '#f4efe6' },
+  miss: { tag: 'MISS', color: '#94a3b8', textColor: '#94a3b8' },
+  stagger: { tag: 'STAG', color: '#fb923c', textColor: '#fed7aa' },
+  heal: { tag: 'HEAL', color: '#4ade80', textColor: '#bbf7d0' },
+  enemy: { tag: 'FOE', color: '#fb7185', textColor: '#fecdd3' },
+  info: { tag: 'LOG', color: '#38bdf8', textColor: '#bae6fd' },
+};
+
 export function BattleHud({
   player,
   battle,
@@ -73,12 +97,25 @@ export function BattleHud({
   onQteTrigger,
 }: BattleHudProps) {
   const enemy = getActiveEnemy(battle);
-  const pStats = computePlayerStats(player, battle.playerBuffs);
+  const pStats = getEffectivePlayerCombatStats(player, battle);
+  const weatherProfile = getZoneWeatherProfile(battle.zone);
+  const weatherFx = getWeatherCombatEffect(battle.zone);
   const equippedSkills = getEquippedSkillsList(player);
   const ultimateSkill = player.equippedUltimateId
     ? getSkillById(player.equippedUltimateId)
     : undefined;
   const consumables = getUnlockedConsumables(player);
+
+  const [logCollapsed, setLogCollapsed] = useState(false);
+  const logScrollRef = useRef<HTMLDivElement | null>(null);
+  const latestLogId = battle.logs[0]?.id ?? 0;
+
+  useEffect(() => {
+    const el = logScrollRef.current;
+    if (el && !logCollapsed) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [latestLogId, logCollapsed]);
 
   const isPlayerTurn = battle.phase === 'player_turn';
   const hpPct = Math.max(0, Math.min(100, (player.currentHp / pStats.hp) * 100));
@@ -299,18 +336,101 @@ export function BattleHud({
             </button>
           </div>
 
-          {/* Crisp 2-line Latest Combat Log */}
-          <div className="bg-[#0e0b16]/80 border border-[#4b3f6b] px-2.5 py-1.5 w-full text-right">
-            {battle.logs.slice(0, 2).map((l, idx) => (
-              <div
-                key={l.id}
-                className={`text-[11px] leading-snug truncate ${
-                  idx === 0 ? 'text-[#f4efe6] font-semibold' : 'text-[#94a3b8]'
-                }`}
-              >
-                {l.text}
+          {/* Active Stage Weather Combat Modifier */}
+          <div
+            data-testid="battle-weather-badge"
+            title={weatherFx.summary}
+            style={{ borderColor: weatherFx.accent }}
+            className="bg-[#1b162b]/95 border px-2.5 py-1 shadow-[0_3px_0_#0e0b16] flex items-center gap-1.5 text-[11px] font-mono-num"
+          >
+            {weatherProfile.kind === 'rain' ? (
+              <CloudRain className="w-3.5 h-3.5 shrink-0" style={{ color: weatherFx.accent }} />
+            ) : weatherProfile.kind === 'snow' ? (
+              <Snowflake className="w-3.5 h-3.5 shrink-0" style={{ color: weatherFx.accent }} />
+            ) : weatherProfile.kind === 'embers' || weatherProfile.kind === 'volcanic_storm' ? (
+              <Flame className="w-3.5 h-3.5 shrink-0" style={{ color: weatherFx.accent }} />
+            ) : weatherProfile.kind === 'leaves' ? (
+              <Wind className="w-3.5 h-3.5 shrink-0" style={{ color: weatherFx.accent }} />
+            ) : weatherProfile.kind === 'arcane_ash' ? (
+              <Zap className="w-3.5 h-3.5 shrink-0" style={{ color: weatherFx.accent }} />
+            ) : (
+              <Sun className="w-3.5 h-3.5 shrink-0" style={{ color: weatherFx.accent }} />
+            )}
+            <span className="font-pixel text-[10px] text-[#f4efe6]">{weatherFx.name}</span>
+            <span className="text-[#4b3f6b]">·</span>
+            <span className="font-semibold" style={{ color: weatherFx.accent }}>
+              {weatherFx.shortEffect}
+            </span>
+          </div>
+
+          {/* Translucent Scrolling Classic RPG Combat Log Feed */}
+          <div
+            data-testid="combat-log-feed"
+            className="w-[340px] md:w-[390px] bg-[#0e0b16]/62 backdrop-blur-[2px] border-2 border-[#4b3f6b]/90 shadow-[0_3px_0_#0e0b16]"
+          >
+            <div className="flex items-center justify-between px-2.5 py-1 border-b border-[#4b3f6b]/60 bg-[#1b162b]/55">
+              <div className="flex items-center gap-1.5">
+                <ScrollText className="w-3 h-3 text-[#f7c948]" />
+                <span className="font-pixel text-[10px] text-[#f7c948] tracking-wide">
+                  COMBAT LOG
+                </span>
+                <span className="font-mono-num text-[10px] text-[#94a3b8]">
+                  ({battle.logs.length})
+                </span>
               </div>
-            ))}
+              <button
+                type="button"
+                aria-label={logCollapsed ? 'Expand combat log' : 'Collapse combat log'}
+                onClick={() => setLogCollapsed((prev) => !prev)}
+                className="flex items-center gap-0.5 text-[10px] font-mono-num text-[#cbd5e1] hover:text-[#f7c948] cursor-pointer px-1"
+              >
+                <span>{logCollapsed ? 'Show' : 'Hide'}</span>
+                {logCollapsed ? (
+                  <ChevronDown className="w-3 h-3" />
+                ) : (
+                  <ChevronUp className="w-3 h-3" />
+                )}
+              </button>
+            </div>
+
+            {!logCollapsed && (
+              <div
+                ref={logScrollRef}
+                data-testid="combat-log-scroll"
+                className="max-h-[112px] overflow-y-auto px-2.5 py-1.5 space-y-1 text-[11px] leading-snug"
+              >
+                {[...battle.logs].reverse().map((l, idx, arr) => {
+                  const isLatest = idx === arr.length - 1;
+                  const meta = LOG_TONE_META[l.tone];
+                  return (
+                    <div
+                      key={l.id}
+                      data-tone={l.tone}
+                      className={`flex items-start gap-1.5 ${
+                        isLatest ? 'opacity-100 font-semibold' : 'opacity-80'
+                      } ${l.tone === 'miss' ? 'italic' : ''}`}
+                    >
+                      <span className="font-mono-num text-[10px] text-[#64748b] shrink-0 mt-[1px]">
+                        T{l.turn ?? 1}
+                      </span>
+                      <span
+                        className="font-mono-num text-[9px] font-bold px-1 py-0.2 border shrink-0 mt-[1px]"
+                        style={{
+                          color: meta.color,
+                          borderColor: `${meta.color}66`,
+                          backgroundColor: 'rgba(14, 11, 22, 0.72)',
+                        }}
+                      >
+                        {meta.tag}
+                      </span>
+                      <span style={{ color: isLatest ? meta.textColor : '#cbd5e1' }}>
+                        {l.text}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       </div>

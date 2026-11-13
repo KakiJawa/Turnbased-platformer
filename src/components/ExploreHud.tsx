@@ -1,6 +1,7 @@
-import { AlertTriangle, Backpack, GitBranch, Pause, Volume2, VolumeX } from 'lucide-react';
+import { AlertTriangle, Backpack, CloudRain, Flame, GitBranch, Pause, Snowflake, Sun, Volume2, VolumeX, Wind, Zap } from 'lucide-react';
 import { computePlayerStats, getXpToNextLevel } from '../game/rpgLogic';
 import { PlayerState, StageDefinition, WorldEntity } from '../game/types';
+import { getWeatherCombatEffect, getZoneWeatherProfile } from '../game/weather';
 
 interface ExploreHudProps {
   player: PlayerState;
@@ -30,6 +31,8 @@ export function ExploreHud({
   onSelectZone,
 }: ExploreHudProps) {
   const stats = computePlayerStats(player);
+  const weatherProfile = getZoneWeatherProfile(stage.zone);
+  const weatherFx = getWeatherCombatEffect(stage.zone);
   const xpNeeded = getXpToNextLevel(player.level, player.classTier);
   const hpPct = Math.max(0, Math.min(100, (player.currentHp / stats.hp) * 100));
   const mpPct = Math.max(0, Math.min(100, (player.currentMp / stats.mp) * 100));
@@ -136,6 +139,27 @@ export function ExploreHud({
                 Z{z}
               </button>
             ))}
+          </div>
+          <div
+            data-testid="explore-weather-badge"
+            title={weatherFx.summary}
+            className="mt-1.5 pt-1 border-t border-[#4b3f6b]/60 flex items-center gap-1.5 text-[10px] font-mono-num"
+          >
+            {weatherProfile.kind === 'rain' ? (
+              <CloudRain className="w-3 h-3 shrink-0" style={{ color: weatherFx.accent }} />
+            ) : weatherProfile.kind === 'snow' ? (
+              <Snowflake className="w-3 h-3 shrink-0" style={{ color: weatherFx.accent }} />
+            ) : weatherProfile.kind === 'embers' || weatherProfile.kind === 'volcanic_storm' ? (
+              <Flame className="w-3 h-3 shrink-0" style={{ color: weatherFx.accent }} />
+            ) : weatherProfile.kind === 'leaves' ? (
+              <Wind className="w-3 h-3 shrink-0" style={{ color: weatherFx.accent }} />
+            ) : weatherProfile.kind === 'arcane_ash' ? (
+              <Zap className="w-3 h-3 shrink-0" style={{ color: weatherFx.accent }} />
+            ) : (
+              <Sun className="w-3 h-3 shrink-0" style={{ color: weatherFx.accent }} />
+            )}
+            <span className="text-[#f4efe6] font-semibold">{weatherProfile.label}:</span>
+            <span style={{ color: weatherFx.accent }}>{weatherFx.shortEffect}</span>
           </div>
         </div>
 

@@ -12,6 +12,7 @@ import {
 } from './sprites';
 import { PlayerState, StageDefinition } from './types';
 import { VfxManager } from './vfx';
+import type { WeatherSystem } from './weather';
 
 export const INTERNAL_WIDTH = 480;
 export const INTERNAL_HEIGHT = 270;
@@ -26,7 +27,8 @@ export function renderExploreFrame(
   playerState: PlayerState,
   vfx: VfxManager,
   time: number,
-  isTitlePreview = false
+  isTitlePreview = false,
+  weather?: WeatherSystem
 ) {
   ctx.imageSmoothingEnabled = false;
   const { ox, oy } = vfx.getShakeOffset();
@@ -41,8 +43,10 @@ export function renderExploreFrame(
   ctx.fillRect(0, 72, INTERNAL_WIDTH, 32);
   ctx.globalAlpha = 1;
 
-  // Parallax distant mountains
   const cam = isTitlePreview ? 0 : pPlayer.cameraX;
+  weather?.renderSkyDecor(ctx, stage.zone, time, cam);
+
+  // Parallax distant mountains
   for (let i = 0; i < 8; i++) {
     const mx = Math.round(((i * 110 - cam * 0.25) % 880 + 880) % 880 - 90);
     ctx.fillStyle = stage.zone >= 3 ? '#261733' : '#2a4d5c';
@@ -61,6 +65,8 @@ export function renderExploreFrame(
     ctx.fillRect(cx, cy, 36, 8);
     ctx.fillRect(cx + 8, cy - 5, 20, 6);
   }
+
+  weather?.renderParticles(ctx, stage.zone, time, 'back');
 
   ctx.save();
   ctx.translate(Math.round(-cam + ox), Math.round(oy));
@@ -177,6 +183,7 @@ export function renderExploreFrame(
 
   vfx.render(ctx);
   ctx.restore();
+  weather?.renderParticles(ctx, stage.zone, time, 'front');
 }
 
 export function renderBattleFrame(
@@ -185,7 +192,8 @@ export function renderBattleFrame(
   battle: BattleState,
   playerState: PlayerState,
   vfx: VfxManager,
-  time: number
+  time: number,
+  weather?: WeatherSystem
 ) {
   ctx.imageSmoothingEnabled = false;
   const { ox, oy } = vfx.getShakeOffset();
@@ -200,6 +208,8 @@ export function renderBattleFrame(
   ctx.fillStyle = stage.skyBottom;
   ctx.fillRect(0, 92, INTERNAL_WIDTH, 92);
 
+  weather?.renderSkyDecor(ctx, stage.zone, time, 0);
+
   // Distant silhouettes
   for (let i = 0; i < 6; i++) {
     ctx.fillStyle = stage.zone >= 3 ? '#24142e' : '#244552';
@@ -209,6 +219,8 @@ export function renderBattleFrame(
     ctx.lineTo(i * 95 + 90, 184);
     ctx.fill();
   }
+
+  weather?.renderParticles(ctx, stage.zone, time, 'back');
 
   // Arena Floor
   ctx.fillStyle = stage.grassColor;
@@ -312,6 +324,7 @@ export function renderBattleFrame(
 
   vfx.render(ctx);
   ctx.restore();
+  weather?.renderParticles(ctx, stage.zone, time, 'front');
 }
 
 export function getRarityColor(rarity: keyof typeof RARITY_META): string {

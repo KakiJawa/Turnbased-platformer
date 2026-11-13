@@ -12,6 +12,7 @@ import {
   CombatActionEvents,
   createBattleState,
   executePlayerAction,
+  getActiveEnemy,
   getEquippedSkillsList,
   resolveQteInput,
   stepBattleTimeline,
@@ -23,6 +24,13 @@ import {
   renderBattleFrame,
   renderExploreFrame,
 } from './game/canvasRenderer';
+import {
+  EncounterTransitionState,
+  createEncounterTransition,
+  renderEncounterTransition,
+  startEncounterTransition,
+  stepEncounterTransition,
+} from './game/encounterTransition';
 import { MATERIAL_META, SHOP_CONSUMABLES } from './game/data';
 import {
   clearRunState,
@@ -61,6 +69,7 @@ import {
   WorldEntity,
 } from './game/types';
 import { VfxManager } from './game/vfx';
+import { WeatherSystem } from './game/weather';
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -72,6 +81,8 @@ export default function App() {
   const pPlayerRef = useRef<PlatformerPlayer>(createPlatformerPlayer());
   const battleRef = useRef<BattleState | null>(null);
   const vfxRef = useRef<VfxManager>(new VfxManager());
+  const weatherRef = useRef<WeatherSystem>(new WeatherSystem());
+  const encounterRef = useRef<EncounterTransitionState>(createEncounterTransition());
   const nearbyRef = useRef<WorldEntity | null>(null);
   const keysHeldRef = useRef<Set<string>>(new Set());
   const jumpJustPressedRef = useRef<boolean>(false);
@@ -153,6 +164,10 @@ export default function App() {
         audio.setMood(
           battleRef.current?.encounterRarity === 'boss' ? 'boss' : 'battle'
         );
+        const enemy = battleRef.current ? getActiveEnemy(battleRef.current) : null;
+        if (enemy && enemy.stats.hp > 0) {
+          audio.setBattleEnemyHpRatio(enemy.currentHp / enemy.stats.hp);
+        }
       }
     }
   }, []);
@@ -169,6 +184,10 @@ export default function App() {
 
   const applyCombatEvents = useCallback((events: CombatActionEvents) => {
     const vfx = vfxRef.current;
+    const activeEnemy = battleRef.current ? getActiveEnemy(battleRef.current) : null;
+    if (activeEnemy && activeEnemy.stats.hp > 0) {
+      audio.setBattleEnemyHpRatio(activeEnemy.currentHp / activeEnemy.stats.hp);
+    }
     const comboCount = battleRef.current?.comboCount ?? 0;
     for (const s of events.sfx) {
       if (s === 'hit') audio.playHit();
@@ -215,6 +234,7 @@ export default function App() {
     pPlayerRef.current = createPlatformerPlayer();
     lastHudSyncXRef.current = pPlayerRef.current.x;
     battleRef.current = null;
+    encounterRef.current = createEncounterTransition();
     nearbyRef.current = null;
     victoryRecapRef.current = null;
     setVictoryRecap(null);
@@ -258,6 +278,7 @@ export default function App() {
     pPlayerRef.current = pp;
     lastHudSyncXRef.current = pp.x;
     battleRef.current = null;
+    encounterRef.current = createEncounterTransition();
     nearbyRef.current = null;
     victoryRecapRef.current = null;
     setVictoryRecap(null);
@@ -436,6 +457,10 @@ export default function App() {
         return;
       }
 
+      if (encounterRef.current.phase === 'closing') {
+        return;
+      }
+
       if (code === 'Escape' || code === 'KeyP') {
         if (activeModalRef.current !== 'none') {
           openModal('none');
@@ -554,6 +579,8 @@ export default function App() {
 
       const vfx = vfxRef.current;
       vfx.update(dt);
+      const weather = weatherRef.current;
+      weather.update(dt, stageRef.current.zone);
       const simDt = vfx.hitstop > 0 ? 0 : dt;
 
       const curMode = modeRef.current;
@@ -561,7 +588,8 @@ export default function App() {
       if (
         curMode === 'explore' &&
         activeModalRef.current === 'none' &&
-        !victoryRecapRef.current
+        !victoryRecapRef.current &&
+        encounterRef.current.phase !== 'closing'
       ) {
         const held = keysHeldRef.current;
         const left = held.has('ArrowLeft') || held.has('KeyA');
@@ -617,7 +645,17 @@ export default function App() {
           syncUi();
         }
         if (stepRes.triggeredEnemy) {
-          startBattleFromWorldEntity(stepRes.triggeredEnemy);
+          const rarity = stepRes.triggeredEnemy.enemyRarity ?? 'normal';
+          audio.unlock();
+          audio.setMood('none');
+          audio.playEncounter(rarity);
+          vfx.addTrauma(rarity === 'boss' ? 0.85 : 0.48);
+          keysHeldRef.current.clear();
+          jumpJustPressedRef.current = false;
+          encounterRef.current = startEncounterTransition(
+            stepRes.triggeredEnemy,
+            pPlayerRef.current.cameraX
+          );
         }
       } else if (curMode === 'battle' && battleRef.current) {
         const battle = battleRef.current;
@@ -625,6 +663,11 @@ export default function App() {
         const events = stepBattleTimeline(battle, playerRef.current, simDt);
         if (events.sfx.length > 0 || events.vfx.length > 0) {
           applyCombatEvents(events);
+        } else if (prevPhase !== battle.phase) {
+          const activeEnemy = getActiveEnemy(battle);
+          if (activeEnemy && activeEnemy.stats.hp > 0) {
+            audio.setBattleEnemyHpRatio(activeEnemy.currentHp / activeEnemy.stats.hp);
+          }
         }
 
         if (battle.phase === 'victory' && battle.phaseTimer <= 0.05) {
@@ -681,18 +724,28 @@ export default function App() {
         }
       }
 
+      if (curMode !== 'paused' && encounterRef.current.active) {
+        const tr = stepEncounterTransition(encounterRef.current, dt);
+        encounterRef.current = tr.state;
+        if (tr.readyToEnterBattle) {
+          startBattleFromWorldEntity(tr.readyToEnterBattle);
+        }
+      }
+
       // Render active scene to 480x270 canvas
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext('2d');
       if (ctx) {
-        if (curMode === 'battle' && battleRef.current) {
+        const activeMode = modeRef.current;
+        if (activeMode === 'battle' && battleRef.current) {
           renderBattleFrame(
             ctx,
             stageRef.current,
             battleRef.current,
             playerRef.current,
             vfx,
-            elapsed
+            elapsed,
+            weather
           );
         } else {
           renderExploreFrame(
@@ -702,8 +755,13 @@ export default function App() {
             playerRef.current,
             vfx,
             elapsed,
-            curMode === 'title'
+            activeMode === 'title',
+            weather
           );
+        }
+
+        if (encounterRef.current.active) {
+          renderEncounterTransition(ctx, encounterRef.current);
         }
       }
 
@@ -752,7 +810,7 @@ export default function App() {
 
       {/* Toast Notification */}
       {toast && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-[#1b162b] border-2 border-[#f7c948] px-4 py-2 font-pixel text-xs text-[#f7c948] shadow-[0_4px_0_#0e0b16] animate-juicy-pop pointer-events-none">
+        <div className="fixed top-28 left-1/2 -translate-x-1/2 z-50 bg-[#1b162b] border-2 border-[#f7c948] px-4 py-2 font-pixel text-xs text-[#f7c948] shadow-[0_4px_0_#0e0b16] animate-juicy-pop pointer-events-none">
           {toast}
         </div>
       )}
@@ -1020,6 +1078,7 @@ export default function App() {
               persistCurrentRun();
             }
             battleRef.current = null;
+            encounterRef.current = createEncounterTransition();
             openModal('none');
             updateMode('title');
             syncUi();
