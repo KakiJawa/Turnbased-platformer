@@ -15,6 +15,7 @@ import { useState } from 'react';
 import {
   BattleState,
   getActiveEnemy,
+  getComboBonuses,
   getEquippedSkillsList,
   getUnlockedConsumables,
 } from '../game/battleEngine';
@@ -82,6 +83,7 @@ export function BattleHud({
     0,
     Math.min(100, (player.currentStagger / player.maxStagger) * 100)
   );
+  const comboBonuses = getComboBonuses(battle.comboCount);
 
   return (
     <div className="fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-3 md:p-4">
@@ -188,6 +190,49 @@ export function BattleHud({
             )}
           </div>
         </div>
+
+        {/* Top-Center: Juicy 16-Bit Combo Counter & Total Combo Damage */}
+        {battle.comboCount > 0 && (
+          <div
+            key={battle.comboFlashSeq}
+            data-testid="combo-hud"
+            style={{ borderColor: comboBonuses.tierColor }}
+            className="pointer-events-none bg-[#1b162b]/95 border-2 px-3.5 py-2 shadow-[0_4px_0_#0e0b16] text-center animate-combo-slam min-w-[205px]"
+          >
+            <div className="flex items-baseline justify-center gap-2">
+              <span
+                className="font-pixel text-lg font-bold leading-none"
+                style={{ color: comboBonuses.tierColor }}
+              >
+                {battle.comboCount} HIT{battle.comboCount > 1 ? 'S' : ''}
+              </span>
+              <span
+                className="font-pixel text-[10px] px-1.5 py-0.5 bg-[#0e0b16] border leading-none"
+                style={{
+                  color: comboBonuses.tierColor,
+                  borderColor: comboBonuses.tierColor,
+                }}
+              >
+                {comboBonuses.tierLabel}
+              </span>
+            </div>
+            <div
+              data-testid="combo-total-dmg"
+              className="font-mono-num text-xs font-bold text-[#fffbeb] mt-1 tracking-wide"
+            >
+              {battle.comboDamage.toLocaleString()} TOTAL DMG
+            </div>
+            <div className="flex items-center justify-center gap-2 mt-1 text-[10px] font-mono-num">
+              <span className="text-[#fde047] font-semibold">
+                +{comboBonuses.critDmgBonus}% CRIT DMG
+              </span>
+              <span className="text-[#4b3f6b]">·</span>
+              <span className="text-[#fdba74] font-semibold">
+                +{comboBonuses.staggerBonusPct}% STAG
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Top-Right: Wave Banner, Combat Log Feed & Enemy Inspect Button */}
         <div className="pointer-events-auto flex flex-col items-end gap-2 max-w-[390px]">

@@ -269,6 +269,20 @@ class ChiptuneAudio {
       this.tone(f, 0.22, 'sawtooth', 0.06, f * 0.88, i * 0.16)
     );
   }
+
+  public playComboChime(comboCount: number) {
+    const step = Math.min(14, Math.max(1, comboCount));
+    const baseFreq = 440 * Math.pow(2, step / 12);
+    this.tone(baseFreq, 0.065, 'square', 0.045, baseFreq * 1.12);
+    if (comboCount >= 3) {
+      this.tone(baseFreq * 1.5, 0.09, 'triangle', 0.045, undefined, 0.04);
+    }
+  }
+
+  public playComboBreak() {
+    this.tone(240, 0.08, 'sawtooth', 0.055, 130);
+    this.tone(160, 0.12, 'sawtooth', 0.055, 90, 0.06);
+  }
 }
 
 export const audio = new ChiptuneAudio();

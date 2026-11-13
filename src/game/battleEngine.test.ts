@@ -4,6 +4,7 @@ import {
   createBattleState,
   executePlayerAction,
   getActiveEnemy,
+  getComboBonuses,
   resolveQteInput,
   stepBattleTimeline,
 } from './battleEngine';
@@ -157,4 +158,99 @@ test('QTE cursor sweeps across the track and bounces smoothly inside stepBattleT
     stepBattleTimeline(battle, player, 0.05);
   }
   assert.equal(battle.qte.direction, -1);
+});
+
+test('Combo counter scales Crit DMG & Stagger DMG, tracks total damage, preserves on guard, and breaks on unblocked hit', () => {
+  assert.equal(getComboBonuses(0).critDmgBonus, 0);
+  assert.equal(getComboBonuses(0).staggerMult, 1);
+  assert.equal(getComboBonuses(3).tierLabel, 'BLITZ!');
+  assert.equal(getComboBonuses(5).critDmgBonus, 50);
+  assert.equal(getComboBonuses(5).staggerBonusPct, 40);
+  assert.equal(getComboBonuses(8).tierLabel, 'GODLIKE!!!');
+
+  const origRandom = Math.random;
+  Math.random = () => 0.99; // Ensure no random dodge/block/crit flakiness
+  try {
+    const player = createInitialPlayer();
+    const enemy = spawnEnemyFromTemplate('farm_cow_elite');
+    enemy.stats.hp = 9999;
+    enemy.currentHp = 9999;
+    enemy.maxStagger = 9999;
+    enemy.currentStagger = 9999;
+    enemy.stats.dodge = 0;
+    enemy.stats.block = 0;
+    enemy.ultimateCharge = 0;
+
+    const battle = createBattleState(1, 'elite', 'z1_en_3', [enemy]);
+
+    // Hit 1: Basic Attack
+    executePlayerAction(battle, player, { kind: 'attack' });
+    const dmg1 = 9999 - enemy.currentHp;
+    const stag1 = 9999 - enemy.currentStagger;
+    assert.equal(battle.comboCount, 1);
+    assert.equal(battle.comboDamage, dmg1);
+    assert.ok(dmg1 > 0 && stag1 > 0);
+
+    // Guard preserves combo across enemy turn
+    battle.phase = 'player_turn';
+    executePlayerAction(battle, player, { kind: 'guard' });
+    battle.pendingEnemyAction = 'basic';
+    for (let i = 0; i < 30 && battle.phase !== 'player_turn'; i++) {
+      stepBattleTimeline(battle, player, 0.05);
+    }
+    assert.equal(battle.phase, 'player_turn');
+    assert.equal(battle.comboCount, 1, 'Guarding enemy hit should preserve active combo');
+
+    // Boost combo to 5 hits and verify Counter Strike gets scaling Crit DMG + Stagger DMG vs 0 combo
+    const basePlayer = createInitialPlayer();
+    const enemyA = spawnEnemyFromTemplate('farm_cow_elite');
+    enemyA.stats.hp = 9999;
+    enemyA.currentHp = 9999;
+    enemyA.maxStagger = 9999;
+    enemyA.currentStagger = 9999;
+    const bNoCombo = createBattleState(1, 'elite', 'eA', [enemyA]);
+    bNoCombo.phase = 'qte_counter';
+    bNoCombo.qte = {
+      active: true, phase: 'counter', promptLabel: 'COUNTER!',
+      cursor: 0.5, speed: 1, direction: 1, zoneStart: 0.35, zoneEnd: 0.65,
+      result: 'pending', resultTimer: 2, pendingEnemyDamage: 10, pendingEnemyStagger: 10, pendingMoveName: 'Horn',
+    };
+    resolveQteInput(bNoCombo, { ...basePlayer }, false);
+    const dmgNoCombo = 9999 - enemyA.currentHp;
+    const stagNoCombo = 9999 - enemyA.currentStagger;
+
+    const enemyB = spawnEnemyFromTemplate('farm_cow_elite');
+    enemyB.stats.hp = 9999;
+    enemyB.currentHp = 9999;
+    enemyB.maxStagger = 9999;
+    enemyB.currentStagger = 9999;
+    const bWithCombo = createBattleState(1, 'elite', 'eB', [enemyB]);
+    bWithCombo.comboCount = 5;
+    bWithCombo.comboDamage = 200;
+    bWithCombo.phase = 'qte_counter';
+    bWithCombo.qte = { ...bNoCombo.qte };
+    resolveQteInput(bWithCombo, { ...basePlayer }, false);
+    const dmgWithCombo = 9999 - enemyB.currentHp;
+    const stagWithCombo = 9999 - enemyB.currentStagger;
+
+    assert.ok(dmgWithCombo > dmgNoCombo, `Expected combo crit dmg ${dmgWithCombo} > ${dmgNoCombo}`);
+    assert.ok(stagWithCombo > stagNoCombo, `Expected combo stagger dmg ${stagWithCombo} > ${stagNoCombo}`);
+    assert.equal(bWithCombo.comboCount, 6);
+    assert.equal(bWithCombo.comboDamage, 200 + dmgWithCombo);
+
+    // Unblocked enemy hit breaks the combo back to 0
+    bWithCombo.phase = 'player_turn';
+    executePlayerAction(bWithCombo, { ...basePlayer }, { kind: 'skill', skillId: 'phy_t1_slash' });
+    bWithCombo.pendingEnemyAction = 'basic';
+    let sawComboBreak = false;
+    for (let i = 0; i < 30 && bWithCombo.phase !== 'player_turn'; i++) {
+      const ev = stepBattleTimeline(bWithCombo, { ...basePlayer }, 0.05);
+      if (ev.sfx.includes('comboBreak')) sawComboBreak = true;
+    }
+    assert.equal(sawComboBreak, true);
+    assert.equal(bWithCombo.comboCount, 0);
+    assert.equal(bWithCombo.comboDamage, 0);
+  } finally {
+    Math.random = origRandom;
+  }
 });

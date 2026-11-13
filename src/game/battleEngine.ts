@@ -62,6 +62,53 @@ export interface BattleState {
   logs: BattleLogEntry[];
   rewards: BattleRewards;
   pendingEnemyAction: 'basic' | 'special' | null;
+  comboCount: number;
+  comboDamage: number;
+  maxComboCount: number;
+  maxComboDamage: number;
+  comboFlashSeq: number;
+}
+
+export interface ComboBonuses {
+  critDmgBonus: number;
+  staggerBonusPct: number;
+  staggerMult: number;
+  tierLabel: string;
+  tierColor: string;
+}
+
+export function getComboBonuses(comboCount: number): ComboBonuses {
+  if (comboCount <= 0) {
+    return {
+      critDmgBonus: 0,
+      staggerBonusPct: 0,
+      staggerMult: 1,
+      tierLabel: '',
+      tierColor: '#facc15',
+    };
+  }
+  const critDmgBonus = Math.min(120, comboCount * 10);
+  const staggerBonusPct = Math.min(80, comboCount * 8);
+  const staggerMult = 1 + staggerBonusPct / 100;
+  let tierLabel = 'CHAIN';
+  let tierColor = '#facc15';
+  if (comboCount >= 8) {
+    tierLabel = 'GODLIKE!!!';
+    tierColor = '#c084fc';
+  } else if (comboCount >= 5) {
+    tierLabel = 'FRENZY!!';
+    tierColor = '#f43f5e';
+  } else if (comboCount >= 3) {
+    tierLabel = 'BLITZ!';
+    tierColor = '#fb923c';
+  }
+  return {
+    critDmgBonus,
+    staggerBonusPct,
+    staggerMult,
+    tierLabel,
+    tierColor,
+  };
 }
 
 let logSeq = 1;
@@ -117,6 +164,11 @@ export function createBattleState(
       levelsGained: 0,
     },
     pendingEnemyAction: null,
+    comboCount: 0,
+    comboDamage: 0,
+    maxComboCount: 0,
+    maxComboDamage: 0,
+    comboFlashSeq: 0,
   };
 }
 
@@ -145,16 +197,20 @@ export interface CombatActionEvents {
     | 'victory'
     | 'defeat'
     | 'levelUp'
+    | 'comboUp'
+    | 'comboBreak'
   )[];
   vfx: {
     target: 'player' | 'enemy';
     text: string;
     color: string;
+    yOffset?: number;
     burstColor?: string;
     burstCount?: number;
     hitstop?: number;
     trauma?: number;
     ringColor?: string;
+    flashColor?: string;
   }[];
 }
 
@@ -307,19 +363,24 @@ export function executePlayerAction(
       });
       addBattleLog(battle, `Drank ${item.name}!`, 'info');
     } else if (item.kind === 'stagger_bomb') {
+      const comboBonuses = getComboBonuses(battle.comboCount);
+      const scaledStagger = Math.round(item.power * comboBonuses.staggerMult);
       battle.playerAnim = 'attack';
       battle.playerAnimTimer = 0.35;
-      dealStaggerToEnemy(battle, enemy, item.power, events);
-      events.sfx.push('hit');
+      battle.comboCount += 1;
+      battle.comboFlashSeq += 1;
+      battle.maxComboCount = Math.max(battle.maxComboCount, battle.comboCount);
+      dealStaggerToEnemy(battle, enemy, scaledStagger, events);
+      events.sfx.push('hit', 'comboUp');
       events.vfx.push({
         target: 'enemy',
-        text: `-${item.power} STAGGER`,
+        text: `-${scaledStagger} STAGGER`,
         color: '#facc15',
         burstColor: '#facc15',
         burstCount: 16,
         trauma: 0.45,
       });
-      addBattleLog(battle, `Threw ${item.name}!`, 'stagger');
+      addBattleLog(battle, `Threw ${item.name} (${battle.comboCount}x Combo)!`, 'stagger');
     }
 
     finishPlayerTurn(battle, player, events);
@@ -332,10 +393,15 @@ export function executePlayerAction(
     player.currentMp = Math.min(pStats.mp, player.currentMp + 4);
     player.ultimateCharge = Math.min(100, player.ultimateCharge + 16);
 
-    const res = calculateDamage(pStats, enemy.stats, {
+    const comboBonuses = getComboBonuses(battle.comboCount);
+    const boostedAttacker = {
+      ...pStats,
+      critDmg: pStats.critDmg + comboBonuses.critDmgBonus,
+    };
+    const res = calculateDamage(boostedAttacker, enemy.stats, {
       damageType: 'physical',
       powerMult: 1.0,
-      staggerPower: 24,
+      staggerPower: Math.round(24 * comboBonuses.staggerMult),
       defenderIsStaggered: enemy.staggeredTurns > 0,
     });
     applyPlayerDamageResult(battle, enemy, 'Basic Strike', res, events);
@@ -418,15 +484,23 @@ export function executePlayerAction(
       skill.damageType === 'magical' ||
       skill.damageType === 'debuff'
     ) {
-      // Hybrid Apex Zenith scales with ATK + MATK
-      const effectiveAttacker =
+      const comboBonuses = getComboBonuses(battle.comboCount);
+      // Hybrid Apex Zenith scales with ATK + MATK; active combo scales Crit DMG & Stagger DMG
+      const baseOffense =
         skill.id === 'all_t2_ult'
           ? { ...pStats, atk: pStats.atk + Math.round(pStats.matk * 0.85) }
           : pStats;
+      const effectiveAttacker = {
+        ...baseOffense,
+        critDmg: baseOffense.critDmg + comboBonuses.critDmgBonus,
+      };
+      const scaledStaggerPower = Math.round(
+        (skill.staggerPower ?? 30) * comboBonuses.staggerMult
+      );
       const res = calculateDamage(effectiveAttacker, enemy.stats, {
         damageType: skill.damageType === 'magical' ? 'magical' : 'physical',
         powerMult: skill.powerMult ?? 1.3,
-        staggerPower: skill.staggerPower ?? 30,
+        staggerPower: scaledStaggerPower,
         defenderIsStaggered: enemy.staggeredTurns > 0,
         bonusCrit: skill.passiveTag === 'high_crit' ? 25 : 0,
       });
@@ -459,16 +533,23 @@ function dealStaggerToEnemy(
     enemy.staggeredTurns = 2; // Staggered! Skips turn and takes 1.5x damage
     enemy.animState = 'staggered';
     enemy.animTimer = 1.1;
+    if (battle.comboCount > 0) {
+      battle.comboCount += 1;
+      battle.comboFlashSeq += 1;
+      battle.maxComboCount = Math.max(battle.maxComboCount, battle.comboCount);
+    }
     events.sfx.push('staggerBreak');
     events.vfx.push({
       target: 'enemy',
       text: 'STAGGER BREAK!',
       color: '#facc15',
+      yOffset: -32,
       burstColor: '#facc15',
       burstCount: 24,
       hitstop: 0.08,
       trauma: 0.7,
       ringColor: '#facc15',
+      flashColor: '#facc15',
     });
     addBattleLog(battle, `${enemy.name} is STAGGERED! (+50% DMG taken)`, 'stagger');
   }
@@ -493,26 +574,62 @@ function applyPlayerDamageResult(
   enemy.animState = enemy.currentHp === 0 ? 'death' : 'hit';
   enemy.animTimer = enemy.currentHp === 0 ? 0.65 : 0.36;
 
+  // Build combo sequence & accumulate total combo damage
+  battle.comboCount += 1;
+  battle.comboDamage += res.damage;
+  battle.comboFlashSeq += 1;
+  battle.maxComboCount = Math.max(battle.maxComboCount, battle.comboCount);
+  battle.maxComboDamage = Math.max(battle.maxComboDamage, battle.comboDamage);
+  const comboBonuses = getComboBonuses(battle.comboCount);
+
   if (res.isCrit || isUltimate) {
     events.sfx.push('crit');
   } else {
     events.sfx.push('hit');
   }
+  events.sfx.push('comboUp');
+
+  const extraComboParticles = Math.min(16, battle.comboCount * 2);
+  const isComboMilestone =
+    battle.comboCount === 3 ||
+    battle.comboCount === 5 ||
+    battle.comboCount === 8 ||
+    (battle.comboCount >= 10 && battle.comboCount % 2 === 0);
 
   events.vfx.push({
     target: 'enemy',
     text: res.isCrit ? `CRIT ${res.damage}!` : `${res.damage}`,
     color: res.isCrit ? '#facc15' : '#ffffff',
-    burstColor: isUltimate ? '#a855f7' : res.isCrit ? '#facc15' : '#ef4444',
-    burstCount: isUltimate ? 28 : res.isCrit ? 18 : 10,
+    yOffset: 10,
+    burstColor: isUltimate
+      ? '#a855f7'
+      : res.isCrit
+      ? '#facc15'
+      : battle.comboCount >= 3
+      ? comboBonuses.tierColor
+      : '#ef4444',
+    burstCount: (isUltimate ? 28 : res.isCrit ? 18 : 10) + extraComboParticles,
     hitstop: isUltimate ? 0.08 : res.isCrit ? 0.06 : 0.03,
-    trauma: isUltimate ? 0.8 : res.isCrit ? 0.55 : 0.28,
-    ringColor: isUltimate ? '#facc15' : undefined,
+    trauma: Math.min(0.95, (isUltimate ? 0.8 : res.isCrit ? 0.55 : 0.28) + Math.min(0.25, battle.comboCount * 0.03)),
+    ringColor: isUltimate ? '#facc15' : isComboMilestone ? comboBonuses.tierColor : undefined,
+    flashColor: isUltimate ? '#a855f7' : isComboMilestone ? comboBonuses.tierColor : undefined,
   });
+
+  if (battle.comboCount >= 2) {
+    events.vfx.push({
+      target: 'enemy',
+      text: `${battle.comboCount}x COMBO! ${battle.comboDamage} TOT`,
+      color: comboBonuses.tierColor,
+      yOffset: -46,
+      hitstop: isComboMilestone ? 0.05 : undefined,
+    });
+  }
 
   addBattleLog(
     battle,
-    `${moveName} hit ${enemy.name} for ${res.damage}${res.isCrit ? ' CRIT' : ''}!`,
+    `${moveName} hit ${enemy.name} for ${res.damage}${res.isCrit ? ' CRIT' : ''}${
+      battle.comboCount >= 2 ? ` (${battle.comboCount}x · ${battle.comboDamage} TOT!)` : '!'
+    }`,
     res.isCrit ? 'crit' : 'hit'
   );
 
@@ -849,10 +966,15 @@ export function resolveQteInput(
     battle.playerAnim = 'attack';
     battle.playerAnimTimer = 0.42;
     player.ultimateCharge = Math.min(100, player.ultimateCharge + 24);
-    const counterRes = calculateDamage(pStats, enemy.stats, {
+    const comboBonuses = getComboBonuses(battle.comboCount);
+    const boostedAttacker = {
+      ...pStats,
+      critDmg: pStats.critDmg + comboBonuses.critDmgBonus,
+    };
+    const counterRes = calculateDamage(boostedAttacker, enemy.stats, {
       damageType: 'physical',
       powerMult: 1.65,
-      staggerPower: 48,
+      staggerPower: Math.round(48 * comboBonuses.staggerMult),
       defenderIsStaggered: enemy.staggeredTurns > 0,
       forceCrit: true,
       allowDodge: false,
@@ -920,6 +1042,28 @@ function applyDamageToPlayer(
     burstCount: res.isBlocked ? 5 : 12,
     trauma: res.isBlocked ? 0.15 : 0.38,
   });
+
+  if (!res.isBlocked && battle.comboCount > 0) {
+    const brokenHits = battle.comboCount;
+    const brokenDamage = battle.comboDamage;
+    battle.comboCount = 0;
+    battle.comboDamage = 0;
+    if (brokenHits >= 2) {
+      events.sfx.push('comboBreak');
+      events.vfx.push({
+        target: 'player',
+        text: 'COMBO BROKEN!',
+        color: '#fb7185',
+        yOffset: -16,
+      });
+      addBattleLog(
+        battle,
+        `${attackerName}'s ${moveName} dealt ${res.damage} — ${brokenHits}x Combo (${brokenDamage} DMG) broken!`,
+        'enemy'
+      );
+      return;
+    }
+  }
 
   addBattleLog(
     battle,

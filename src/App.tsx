@@ -128,6 +128,7 @@ export default function App() {
 
   const applyCombatEvents = useCallback((events: CombatActionEvents) => {
     const vfx = vfxRef.current;
+    const comboCount = battleRef.current?.comboCount ?? 0;
     for (const s of events.sfx) {
       if (s === 'hit') audio.playHit();
       else if (s === 'crit') audio.playCrit();
@@ -140,18 +141,24 @@ export default function App() {
       else if (s === 'levelUp') audio.playLevelUp();
       else if (s === 'victory') audio.playVictory();
       else if (s === 'defeat') audio.playDefeat();
+      else if (s === 'comboUp') audio.playComboChime(comboCount);
+      else if (s === 'comboBreak') audio.playComboBreak();
     }
     for (const v of events.vfx) {
       const pos =
         v.target === 'enemy'
           ? { x: BATTLE_ENEMY_POS.x, y: BATTLE_ENEMY_POS.y - 38 }
           : { x: 126, y: 145 };
-      vfx.spawnPopup(pos.x, pos.y, v.text, v.color, v.hitstop ? 1.25 : 1);
+      const popY = pos.y + (v.yOffset ?? 0);
+      vfx.spawnPopup(pos.x, popY, v.text, v.color, v.hitstop ? 1.25 : 1);
       if (v.burstColor) {
         vfx.spawnBurst(pos.x, pos.y + 10, v.burstCount ?? 10, v.burstColor);
       }
       if (v.ringColor) {
         vfx.spawnRing(pos.x, pos.y + 10, 40, v.ringColor);
+      }
+      if (v.flashColor) {
+        vfx.triggerFlash(v.flashColor, 0.28);
       }
       if (v.hitstop) vfx.triggerHitstop(v.hitstop);
       if (v.trauma) vfx.addTrauma(v.trauma);
