@@ -177,13 +177,6 @@ export function tickBuffsAndCooldowns(
   player: PlayerState,
   events: CombatActionEvents
 ) {
-  // Tick player cooldowns (1-5 turns)
-  for (const id of Object.keys(battle.skillCooldowns)) {
-    if (battle.skillCooldowns[id] > 0) {
-      battle.skillCooldowns[id] -= 1;
-    }
-  }
-
   // Tick player buffs (regen, etc.)
   const pStats = computePlayerStats(player, battle.playerBuffs);
   const nextPlayerBuffs: ActiveBuff[] = [];
@@ -243,6 +236,16 @@ export function executePlayerAction(
   const enemy = getActiveEnemy(battle);
   const pStats = computePlayerStats(player, battle.playerBuffs);
   battle.playerGuarding = false;
+
+  // Tick existing skill cooldowns when taking a turn action (excluding any skill cast this turn)
+  const usedSkillId = action.kind === 'skill' ? action.skillId : null;
+  if (action.kind !== 'skill') {
+    for (const id of Object.keys(battle.skillCooldowns)) {
+      if (battle.skillCooldowns[id] > 0) {
+        battle.skillCooldowns[id] -= 1;
+      }
+    }
+  }
 
   if (action.kind === 'guard') {
     battle.playerGuarding = true;
@@ -355,6 +358,11 @@ export function executePlayerAction(
       if (player.currentMp < mpCost) return events;
       if ((battle.skillCooldowns[skill.id] ?? 0) > 0) return events;
       player.currentMp -= mpCost;
+      for (const id of Object.keys(battle.skillCooldowns)) {
+        if (id !== usedSkillId && battle.skillCooldowns[id] > 0) {
+          battle.skillCooldowns[id] -= 1;
+        }
+      }
       battle.skillCooldowns[skill.id] = skill.cooldown ?? 1;
       player.ultimateCharge = Math.min(100, player.ultimateCharge + 22);
     }
@@ -563,13 +571,13 @@ export function handleEnemyDefeated(
     });
   }
 
-  // Loot drop chance scaled by enemy rarity
+  // Loot drop chance scaled by enemy rarity & zone
   const dropChance =
-    enemy.rarity === 'boss' ? 1.0 : enemy.rarity === 'elite' ? 0.8 : 0.42;
+    enemy.rarity === 'boss' ? 1.0 : enemy.rarity === 'elite' ? 0.55 : 0.28;
   if (Math.random() < dropChance) {
     const slots: EquipmentSlot[] = ['weapon', 'armor', 'helm', 'charm'];
     const slot = slots[Math.floor(Math.random() * slots.length)];
-    const rarity = rollRarityForEnemy(enemy.rarity);
+    const rarity = rollRarityForEnemy(enemy.rarity, battle.zone);
     const gear = generateEquipment(slot, rarity, battle.zone);
     player.inventory.push(gear);
     battle.rewards.items.push(gear);

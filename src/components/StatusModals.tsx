@@ -87,7 +87,7 @@ export function OutcomeModal({ kind, player, zone, onRestart }: OutcomeModalProp
           </div>
           <div className="bg-[#0e0b16] border border-[#4b3f6b] p-2">
             <div className="text-[#94a3b8]">Zone</div>
-            <div className="font-bold text-[#f7c948] mt-0.5">{zone}/4</div>
+            <div className="font-bold text-[#f7c948] mt-0.5">{zone}/8</div>
           </div>
           <div className="bg-[#0e0b16] border border-[#4b3f6b] p-2">
             <div className="text-[#94a3b8]">Slain</div>

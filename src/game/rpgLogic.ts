@@ -439,26 +439,63 @@ export function generateEquipment(
   };
 }
 
-export function rollRarityForEnemy(enemyRarity: EnemyRarity): Rarity {
-  const r = Math.random();
+export function rollRarityForEnemy(
+  enemyRarity: EnemyRarity,
+  zone = 1,
+  rng: () => number = Math.random
+): Rarity {
+  const r = rng();
+
+  // Zone 1 - 3: strictly Common to Rare
+  if (zone <= 3) {
+    if (enemyRarity === 'boss') {
+      if (r < 0.3) return 'rare';
+      if (r < 0.85) return 'uncommon';
+      return 'common';
+    }
+    if (enemyRarity === 'elite') {
+      if (r < 0.12) return 'rare';
+      if (r < 0.58) return 'uncommon';
+      return 'common';
+    }
+    if (r < 0.02) return 'rare';
+    if (r < 0.16) return 'uncommon';
+    return 'common';
+  }
+
+  // Zone 4 - 6: strictly Uncommon to Epic
+  if (zone <= 6) {
+    if (enemyRarity === 'boss') {
+      if (r < 0.38) return 'epic';
+      if (r < 0.88) return 'rare';
+      return 'uncommon';
+    }
+    if (enemyRarity === 'elite') {
+      if (r < 0.18) return 'epic';
+      if (r < 0.7) return 'rare';
+      return 'uncommon';
+    }
+    if (r < 0.05) return 'epic';
+    if (r < 0.35) return 'rare';
+    return 'uncommon';
+  }
+
+  // Zone 7+: Rare to Mythic
   if (enemyRarity === 'boss') {
     if (r < 0.08) return 'mythic';
     if (r < 0.35) return 'legendary';
-    if (r < 0.75) return 'epic';
+    if (r < 0.8) return 'epic';
     return 'rare';
   }
   if (enemyRarity === 'elite') {
-    if (r < 0.03) return 'mythic';
-    if (r < 0.14) return 'legendary';
-    if (r < 0.42) return 'epic';
-    if (r < 0.8) return 'rare';
-    return 'uncommon';
+    if (r < 0.02) return 'mythic';
+    if (r < 0.18) return 'legendary';
+    if (r < 0.65) return 'epic';
+    return 'rare';
   }
-  // Normal enemy
-  if (r < 0.02) return 'epic';
-  if (r < 0.12) return 'rare';
-  if (r < 0.42) return 'uncommon';
-  return 'common';
+  if (r < 0.05) return 'legendary';
+  if (r < 0.38) return 'epic';
+  return 'rare';
 }
 
 export function getEnchantCost(item: EquipmentItem): {

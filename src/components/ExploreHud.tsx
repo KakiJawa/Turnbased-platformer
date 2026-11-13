@@ -109,14 +109,14 @@ export function ExploreHud({
         {/* Top-Center: Stage Banner & Quick Zone Selector */}
         <div className="pointer-events-auto hidden md:flex flex-col items-center bg-[#1b162b]/90 border-2 border-[#4b3f6b] px-4 py-1.5 shadow-[0_3px_0_#0e0b16]">
           <div className="font-pixel text-xs text-[#f4efe6]">{stage.name}</div>
-          <div className="flex items-center gap-1.5 mt-1">
-            {[1, 2, 3, 4].map((z) => (
+          <div className="flex items-center gap-1 mt-1">
+            {[1, 2, 3, 4, 5, 6, 7, 8].map((z) => (
               <button
                 key={z}
                 type="button"
                 disabled={z > player.highestZone}
                 onClick={() => onSelectZone(z)}
-                className={`font-pixel text-[10px] px-2 py-0.5 border cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed ${
+                className={`font-pixel text-[10px] px-1.5 py-0.5 border cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed ${
                   stage.zone === z
                     ? 'bg-[#f7c948] text-[#0e0b16] border-[#0e0b16]'
                     : 'bg-[#2d2544] text-[#e6d8bd] border-[#4b3f6b] hover:bg-[#3d335c]'

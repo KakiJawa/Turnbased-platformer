@@ -223,7 +223,7 @@ export default function App() {
       const goldGain = 25 * zone + Math.floor(Math.random() * 20);
       const slots: EquipmentSlot[] = ['weapon', 'armor', 'helm', 'charm'];
       const slot = slots[Math.floor(Math.random() * slots.length)];
-      const rarity = rollRarityForEnemy(zone >= 3 ? 'elite' : 'normal');
+      const rarity = rollRarityForEnemy(zone >= 4 ? 'elite' : 'normal', zone);
       const gear = generateEquipment(slot, rarity, zone);
       playerRef.current.gold += goldGain;
       playerRef.current.inventory.push(gear);
@@ -244,7 +244,7 @@ export default function App() {
         return;
       }
       const nextZone = stageRef.current.zone + 1;
-      if (nextZone <= 4) {
+      if (nextZone <= 8) {
         playerRef.current.highestZone = Math.max(
           playerRef.current.highestZone,
           nextZone
@@ -501,7 +501,7 @@ export default function App() {
 
           const rewards = battle.rewards;
           const isFinalBoss =
-            stageRef.current.zone === 4 && battle.encounterRarity === 'boss';
+            stageRef.current.zone === 8 && battle.encounterRarity === 'boss';
 
           if (isFinalBoss) {
             battleRef.current = null;
@@ -524,7 +524,11 @@ export default function App() {
           battleRef.current = null;
           updateMode('gameover');
           syncUi();
-        } else if (prevPhase !== battle.phase) {
+        } else if (
+          prevPhase !== battle.phase ||
+          battle.phase === 'qte_dodge' ||
+          battle.phase === 'qte_counter'
+        ) {
           syncUi();
         }
       }

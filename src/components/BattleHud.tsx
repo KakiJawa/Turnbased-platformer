@@ -265,6 +265,7 @@ export function BattleHud({
             />
             {/* Moving Cursor */}
             <div
+              data-testid="qte-cursor"
               className="absolute top-0 bottom-0 w-2 bg-[#facc15] border border-[#0e0b16]"
               style={{ left: `calc(${battle.qte.cursor * 100}% - 4px)` }}
             />

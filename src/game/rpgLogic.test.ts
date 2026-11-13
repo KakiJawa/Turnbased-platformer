@@ -13,6 +13,7 @@ import {
   getXpToNextLevel,
   grantXp,
   reforgeEquipment,
+  rollRarityForEnemy,
   spawnEnemyWave,
   toggleEquipSkill,
   unlockSkillNode,
@@ -144,4 +145,47 @@ test('Staggered targets take 1.5x damage and wave spawner creates 1-3 enemies', 
   const bossWave = spawnEnemyWave(1, 'boss');
   assert.equal(bossWave.length, 1);
   assert.equal(bossWave[0].rarity, 'boss');
+});
+
+test('Zone-gated equipment rarity strictly limits Zones 1-3 to Common-Rare, 4-6 to Uncommon-Epic, 7-8 to Rare-Mythic', () => {
+  const samples = [0.0, 0.01, 0.05, 0.15, 0.3, 0.5, 0.75, 0.99];
+  const enemyRarities: ('normal' | 'elite' | 'boss')[] = ['normal', 'elite', 'boss'];
+
+  for (const zone of [1, 2, 3]) {
+    for (const er of enemyRarities) {
+      for (const s of samples) {
+        const dropped = rollRarityForEnemy(er, zone, () => s);
+        assert.ok(
+          dropped === 'common' || dropped === 'uncommon' || dropped === 'rare',
+          `Zone ${zone} ${er} dropped unexpected ${dropped}`
+        );
+      }
+    }
+  }
+
+  for (const zone of [4, 5, 6]) {
+    for (const er of enemyRarities) {
+      for (const s of samples) {
+        const dropped = rollRarityForEnemy(er, zone, () => s);
+        assert.ok(
+          dropped === 'uncommon' || dropped === 'rare' || dropped === 'epic',
+          `Zone ${zone} ${er} dropped unexpected ${dropped}`
+        );
+      }
+    }
+  }
+
+  for (const zone of [7, 8]) {
+    for (const er of enemyRarities) {
+      for (const s of samples) {
+        const dropped = rollRarityForEnemy(er, zone, () => s);
+        assert.ok(
+          dropped === 'rare' || dropped === 'epic' || dropped === 'legendary' || dropped === 'mythic',
+          `Zone ${zone} ${er} dropped unexpected ${dropped}`
+        );
+      }
+    }
+    assert.equal(rollRarityForEnemy('boss', zone, () => 0.01), 'mythic');
+    assert.equal(rollRarityForEnemy('boss', zone, () => 0.15), 'legendary');
+  }
 });

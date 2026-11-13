@@ -53,7 +53,7 @@ export interface PlatformerInput {
 
 const MOVE_SPEED = 118;
 const GRAVITY = 560;
-const JUMP_VELOCITY = -238;
+const JUMP_VELOCITY = -288;
 
 export function stepPlatformer(
   player: PlatformerPlayer,
