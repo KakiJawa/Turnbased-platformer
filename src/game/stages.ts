@@ -1,6 +1,6 @@
 import { ENEMY_TEMPLATES } from './data';
 import { PALETTE } from './palette';
-import { MaterialId, StageDefinition, WorldEntity } from './types';
+import { HazardKind, MaterialId, PlatformRect, StageDefinition, WorldEntity } from './types';
 
 interface ZoneTheme {
   zone: number;
@@ -11,6 +11,8 @@ interface ZoneTheme {
   groundColor: string;
   grassColor: string;
   materialId: MaterialId;
+  hazardKind: HazardKind;
+  platformKind: PlatformRect['kind'];
 }
 
 const ZONE_THEMES: ZoneTheme[] = [
@@ -23,6 +25,8 @@ const ZONE_THEMES: ZoneTheme[] = [
     groundColor: '#5c3c24',
     grassColor: PALETTE.grassMid,
     materialId: 'feather',
+    hazardKind: 'thorns',
+    platformKind: 'wood',
   },
   {
     zone: 2,
@@ -33,6 +37,8 @@ const ZONE_THEMES: ZoneTheme[] = [
     groundColor: '#3f3026',
     grassColor: '#2c6e49',
     materialId: 'ironShard',
+    hazardKind: 'thorns',
+    platformKind: 'wood',
   },
   {
     zone: 3,
@@ -43,6 +49,8 @@ const ZONE_THEMES: ZoneTheme[] = [
     groundColor: '#3d332c',
     grassColor: '#5c6b4d',
     materialId: 'ironShard',
+    hazardKind: 'spikes',
+    platformKind: 'stone',
   },
   {
     zone: 4,
@@ -53,6 +61,8 @@ const ZONE_THEMES: ZoneTheme[] = [
     groundColor: '#3a2d3d',
     grassColor: '#6b443b',
     materialId: 'orcFang',
+    hazardKind: 'spikes',
+    platformKind: 'stone',
   },
   {
     zone: 5,
@@ -63,6 +73,8 @@ const ZONE_THEMES: ZoneTheme[] = [
     groundColor: '#291a1c',
     grassColor: '#991b1b',
     materialId: 'orcFang',
+    hazardKind: 'lava',
+    platformKind: 'stone',
   },
   {
     zone: 6,
@@ -73,6 +85,8 @@ const ZONE_THEMES: ZoneTheme[] = [
     groundColor: '#2b2d3c',
     grassColor: '#334155',
     materialId: 'dragonScale',
+    hazardKind: 'spikes',
+    platformKind: 'stone',
   },
   {
     zone: 7,
@@ -83,6 +97,8 @@ const ZONE_THEMES: ZoneTheme[] = [
     groundColor: '#241b2b',
     grassColor: '#4c1d95',
     materialId: 'dragonScale',
+    hazardKind: 'void_rift',
+    platformKind: 'stone',
   },
   {
     zone: 8,
@@ -93,6 +109,32 @@ const ZONE_THEMES: ZoneTheme[] = [
     groundColor: '#261b26',
     grassColor: '#7f1d1d',
     materialId: 'dragonScale',
+    hazardKind: 'lava',
+    platformKind: 'stone',
+  },
+  {
+    zone: 9,
+    name: 'Sunken Starfall Ruins',
+    subtitle: 'Zone 9 Endgame · Leviathans & Starfall Empress',
+    skyTop: '#081b33',
+    skyBottom: '#164e63',
+    groundColor: '#132a3e',
+    grassColor: '#0891b2',
+    materialId: 'starlightOre',
+    hazardKind: 'void_rift',
+    platformKind: 'crystal',
+  },
+  {
+    zone: 10,
+    name: 'The Void Spire',
+    subtitle: 'Zone 10 Endgame · Chrono Wardens & Architect Malakor',
+    skyTop: '#070312',
+    skyBottom: '#3b0764',
+    groundColor: '#160b24',
+    grassColor: '#7e22ce',
+    materialId: 'voidEssence',
+    hazardKind: 'void_rift',
+    platformKind: 'void',
   },
 ];
 
@@ -100,17 +142,21 @@ export function buildStage(zone: number): StageDefinition {
   const theme = ZONE_THEMES[Math.min(ZONE_THEMES.length - 1, Math.max(0, zone - 1))];
   const groundY = 228;
   const stageWidth = 1560;
+  const pKind = theme.platformKind;
 
-  const platforms = [
+  const platforms: PlatformRect[] = [
     // Continuous main floor
-    { x: 0, y: groundY, w: stageWidth, h: 42, kind: 'ground' as const },
-    // Lowered elevated platforms for crisp, reliable platforming jumps
-    { x: 240, y: 184, w: 96, h: 12, kind: 'wood' as const },
-    { x: 375, y: 144, w: 84, h: 12, kind: 'wood' as const },
-    { x: 560, y: 184, w: 110, h: 12, kind: 'stone' as const },
-    { x: 740, y: 144, w: 96, h: 12, kind: 'wood' as const },
-    { x: 930, y: 184, w: 120, h: 12, kind: 'stone' as const },
-    { x: 1120, y: 144, w: 96, h: 12, kind: 'wood' as const },
+    { x: 0, y: groundY, w: stageWidth, h: 42, kind: 'ground' },
+    // Mid-height platforming ledges
+    { x: 240, y: 184, w: 96, h: 12, kind: pKind },
+    { x: 375, y: 144, w: 84, h: 12, kind: pKind },
+    { x: 560, y: 184, w: 110, h: 12, kind: pKind },
+    { x: 740, y: 144, w: 96, h: 12, kind: pKind },
+    { x: 930, y: 184, w: 120, h: 12, kind: pKind },
+    { x: 1120, y: 144, w: 96, h: 12, kind: pKind },
+    // High aerial secret sky-ledges reached via Bounce Pads
+    { x: 365, y: 96, w: 94, h: 10, kind: zone >= 9 ? pKind : 'stone' },
+    { x: 1125, y: 98, w: 88, h: 10, kind: zone >= 9 ? pKind : 'stone' },
   ];
 
   const zoneNormals = ENEMY_TEMPLATES.filter(
@@ -243,6 +289,81 @@ export function buildStage(zone: number): StageDefinition {
       vx: 20,
       facing: -1,
     },
+
+    // Bounce Pads & Interactive Blessing Shrines
+    {
+      id: `z${zone}_bounce_1`,
+      kind: 'bounce_pad',
+      x: 344,
+      y: groundY,
+      w: 22,
+      h: 10,
+      bounceVelocity: -415,
+    },
+    {
+      id: `z${zone}_bounce_2`,
+      kind: 'bounce_pad',
+      x: 1068,
+      y: groundY,
+      w: 22,
+      h: 10,
+      bounceVelocity: -415,
+    },
+    {
+      id: `z${zone}_shrine_1`,
+      kind: 'shrine',
+      x: 412,
+      y: 96,
+      w: 20,
+      h: 28,
+      used: false,
+    },
+    {
+      id: `z${zone}_sky_mat`,
+      kind: 'material',
+      x: 1168,
+      y: 98,
+      w: 12,
+      h: 12,
+      materialId: theme.materialId,
+      amount: zone >= 9 ? 3 : 2,
+    },
+
+    // Stage Hazards (clearly telegraphed & jumpable)
+    {
+      id: `z${zone}_haz_1`,
+      kind: 'hazard',
+      x: 604,
+      y: groundY,
+      w: 36,
+      h: 10,
+      hazardKind: theme.hazardKind,
+      hazardDamagePct: Math.min(12, 5 + Math.floor(zone * 0.7)),
+    },
+    {
+      id: `z${zone}_haz_2`,
+      kind: 'hazard',
+      x: 992,
+      y: groundY,
+      w: 36,
+      h: 10,
+      hazardKind: theme.hazardKind,
+      hazardDamagePct: Math.min(14, 6 + Math.floor(zone * 0.7)),
+    },
+    ...(zone >= 5
+      ? [
+          {
+            id: `z${zone}_haz_3`,
+            kind: 'hazard' as const,
+            x: 1255,
+            y: groundY,
+            w: 40,
+            h: 10,
+            hazardKind: theme.hazardKind,
+            hazardDamagePct: Math.min(15, 7 + Math.floor(zone * 0.7)),
+          },
+        ]
+      : []),
 
     // Boss at end of stage
     {

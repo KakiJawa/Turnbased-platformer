@@ -1,7 +1,9 @@
-import { Flame, Hammer, ShoppingBag, Sparkles, X } from 'lucide-react';
+import { Check, Flame, Hammer, Heart, ShoppingBag, Sparkles, Swords, X } from 'lucide-react';
 import { useState } from 'react';
 import {
+  ARENA_TRIALS,
   MATERIAL_META,
+  PET_CATALOG,
   SHOP_CONSUMABLES,
   STARTER_SHOP_SLOTS,
   STAT_LABELS,
@@ -15,9 +17,11 @@ import {
 } from '../game/rpgLogic';
 import { EquipmentItem, EquipmentSlot, MaterialId, PlayerState, StatKey } from '../game/types';
 
+export type TownTab = 'shop' | 'blacksmith' | 'pets' | 'arena';
+
 interface FireplaceTownModalProps {
   player: PlayerState;
-  initialTab?: 'shop' | 'blacksmith';
+  initialTab?: TownTab;
   onClose: () => void;
   onRestAtFireplace: () => void;
   onBuyConsumable: (consumableId: string) => void;
@@ -25,6 +29,9 @@ interface FireplaceTownModalProps {
   onBuyMaterial: (materialId: MaterialId) => void;
   onEnchantItem: (itemId: string, equippedSlot?: EquipmentSlot) => { ok: boolean; msg: string };
   onReforgeItem: (itemId: string, equippedSlot?: EquipmentSlot) => { ok: boolean; msg: string };
+  onBuyPet: (petId: string) => { ok: boolean; msg: string };
+  onEquipPet: (petId: string | null) => void;
+  onStartArenaTrial: (trialId: string) => void;
 }
 
 export function FireplaceTownModal({
@@ -37,8 +44,11 @@ export function FireplaceTownModal({
   onBuyMaterial,
   onEnchantItem,
   onReforgeItem,
+  onBuyPet,
+  onEquipPet,
+  onStartArenaTrial,
 }: FireplaceTownModalProps) {
-  const [tab, setTab] = useState<'shop' | 'blacksmith'>(initialTab);
+  const [tab, setTab] = useState<TownTab>(initialTab);
   const [feedback, setFeedback] = useState<string>('');
 
   const allItems: { item: EquipmentItem; equippedSlot?: EquipmentSlot }[] = [
@@ -48,6 +58,9 @@ export function FireplaceTownModal({
     ...player.inventory.map((item) => ({ item })),
   ];
 
+  const ownedPets = player.ownedPetIds ?? [];
+  const completedArenas = player.completedArenaIds ?? [];
+
   return (
     <div className="fixed inset-0 z-30 bg-black/75 flex items-center justify-center p-4">
       <div className="bg-[#1b162b] border-4 border-[#f28729] shadow-[0_8px_0_#0e0b16] w-full max-w-5xl max-h-[88vh] flex flex-col">
@@ -56,7 +69,7 @@ export function FireplaceTownModal({
           <div className="flex items-center gap-3">
             <Flame className="w-5 h-5 text-[#f28729]" />
             <h2 className="font-pixel text-base text-[#f7c948]">
-              Wayside Camp · Fireplace, Shop &amp; Blacksmith
+              Wayside Camp · Shop, Blacksmith, Pets &amp; Arena
             </h2>
           </div>
 
@@ -86,12 +99,12 @@ export function FireplaceTownModal({
         </div>
 
         {/* Tabs */}
-        <div className="flex items-center justify-between px-5 py-2 bg-[#0e0b16]/75 border-b border-[#4b3f6b]">
-          <div className="flex gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-2 bg-[#0e0b16]/75 border-b border-[#4b3f6b]">
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
               onClick={() => setTab('shop')}
-              className={`flex items-center gap-1.5 font-pixel text-xs px-4 py-2 border cursor-pointer ${
+              className={`flex items-center gap-1.5 font-pixel text-xs px-3.5 py-2 border cursor-pointer ${
                 tab === 'shop'
                   ? 'bg-[#f7c948] text-[#0e0b16] border-[#0e0b16]'
                   : 'bg-[#2d2544] text-[#e6d8bd] border-[#4b3f6b]'
@@ -103,7 +116,7 @@ export function FireplaceTownModal({
             <button
               type="button"
               onClick={() => setTab('blacksmith')}
-              className={`flex items-center gap-1.5 font-pixel text-xs px-4 py-2 border cursor-pointer ${
+              className={`flex items-center gap-1.5 font-pixel text-xs px-3.5 py-2 border cursor-pointer ${
                 tab === 'blacksmith'
                   ? 'bg-[#f28729] text-[#0e0b16] border-[#0e0b16]'
                   : 'bg-[#2d2544] text-[#e6d8bd] border-[#4b3f6b]'
@@ -111,6 +124,32 @@ export function FireplaceTownModal({
             >
               <Hammer className="w-4 h-4" />
               <span>Blacksmith Forge</span>
+            </button>
+            <button
+              type="button"
+              data-testid="tab-pets"
+              onClick={() => setTab('pets')}
+              className={`flex items-center gap-1.5 font-pixel text-xs px-3.5 py-2 border cursor-pointer ${
+                tab === 'pets'
+                  ? 'bg-[#4ade80] text-[#0e0b16] border-[#0e0b16]'
+                  : 'bg-[#2d2544] text-[#e6d8bd] border-[#4b3f6b]'
+              }`}
+            >
+              <Heart className="w-4 h-4" />
+              <span>Pet Familiars ({ownedPets.length}/{PET_CATALOG.length})</span>
+            </button>
+            <button
+              type="button"
+              data-testid="tab-arena"
+              onClick={() => setTab('arena')}
+              className={`flex items-center gap-1.5 font-pixel text-xs px-3.5 py-2 border cursor-pointer ${
+                tab === 'arena'
+                  ? 'bg-[#fb7185] text-[#0e0b16] border-[#0e0b16]'
+                  : 'bg-[#2d2544] text-[#e6d8bd] border-[#4b3f6b]'
+              }`}
+            >
+              <Swords className="w-4 h-4" />
+              <span>Boss Rush Arena</span>
             </button>
           </div>
 
@@ -121,13 +160,11 @@ export function FireplaceTownModal({
 
         {/* Content */}
         <div className="p-5 overflow-y-auto">
-          {tab === 'shop' ? (
+          {tab === 'shop' && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {/* Consumables */}
               <div>
-                <h3 className="font-pixel text-xs text-[#86efac] mb-2">
-                  Consumables
-                </h3>
+                <h3 className="font-pixel text-xs text-[#86efac] mb-2">Consumables</h3>
                 <div className="flex flex-col gap-2">
                   {SHOP_CONSUMABLES.map((c) => (
                     <div
@@ -156,9 +193,7 @@ export function FireplaceTownModal({
 
               {/* Starter Common Equipment */}
               <div>
-                <h3 className="font-pixel text-xs text-[#cbd5e1] mb-2">
-                  Common Equipment
-                </h3>
+                <h3 className="font-pixel text-xs text-[#cbd5e1] mb-2">Common Equipment</h3>
                 <div className="flex flex-col gap-2">
                   {STARTER_SHOP_SLOTS.map((g) => (
                     <div
@@ -187,11 +222,9 @@ export function FireplaceTownModal({
                 </div>
               </div>
 
-              {/* Common Materials */}
+              {/* Materials */}
               <div>
-                <h3 className="font-pixel text-xs text-[#fde047] mb-2">
-                  Basic Materials
-                </h3>
+                <h3 className="font-pixel text-xs text-[#fde047] mb-2">Basic Materials</h3>
                 <div className="flex flex-col gap-2">
                   {(['feather', 'hide', 'ironShard'] as MaterialId[]).map((mId) => {
                     const m = MATERIAL_META[mId];
@@ -225,13 +258,14 @@ export function FireplaceTownModal({
                 </div>
               </div>
             </div>
-          ) : (
-            /* Blacksmith Tab: Enchant + Reforge */
+          )}
+
+          {tab === 'blacksmith' && (
             <div className="flex flex-col gap-3">
               <div className="flex flex-wrap gap-3 text-xs font-mono-num bg-[#0e0b16] border border-[#4b3f6b] px-3 py-2">
                 {(Object.keys(MATERIAL_META) as MaterialId[]).map((mId) => (
                   <span key={mId} style={{ color: MATERIAL_META[mId].color }}>
-                    {MATERIAL_META[mId].name}: <strong>{player.materials[mId]}</strong>
+                    {MATERIAL_META[mId].name}: <strong>{player.materials[mId] ?? 0}</strong>
                   </span>
                 ))}
               </div>
@@ -308,6 +342,144 @@ export function FireplaceTownModal({
                           </button>
                         )}
                       </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {tab === 'pets' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3" data-testid="pet-shop-list">
+              {PET_CATALOG.map((pet) => {
+                const owned = ownedPets.includes(pet.id);
+                const equipped = player.equippedPetId === pet.id;
+                return (
+                  <div
+                    key={pet.id}
+                    className="p-3.5 bg-[#0e0b16] border-2 flex flex-col justify-between gap-2.5"
+                    style={{ borderColor: equipped ? pet.accent : '#4b3f6b' }}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-pixel text-sm" style={{ color: pet.accent }}>
+                          {pet.name}
+                        </span>
+                        <span className="font-mono-num text-xs text-[#f7c948]">
+                          {owned ? (equipped ? 'ACTIVE FAMILIAR' : 'OWNED') : `${pet.price} Gold`}
+                        </span>
+                      </div>
+
+                      <div className="mt-1.5 flex flex-wrap gap-1.5 text-[11px] font-mono-num text-[#cbd5e1]">
+                        {Object.entries(pet.statBonus).map(([k, v]) => (
+                          <span
+                            key={k}
+                            className="px-1.5 py-0.5 bg-[#1b162b] border border-[#4b3f6b]"
+                          >
+                            +{v} {STAT_LABELS[k as StatKey]}
+                          </span>
+                        ))}
+                      </div>
+
+                      <div className="mt-2 text-xs text-[#e6d8bd]">
+                        <span className="font-semibold" style={{ color: pet.accent }}>
+                          {pet.assistName}:
+                        </span>{' '}
+                        {pet.assistDesc}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2">
+                      {!owned ? (
+                        <button
+                          type="button"
+                          data-testid={`buy-pet-${pet.id}`}
+                          disabled={player.gold < pet.price}
+                          onClick={() => {
+                            const res = onBuyPet(pet.id);
+                            setFeedback(res.msg);
+                          }}
+                          className="font-pixel text-xs px-4 py-1.5 bg-[#f7c948] text-[#0e0b16] border border-[#0e0b16] hover:bg-[#fde047] disabled:opacity-35 cursor-pointer"
+                        >
+                          Adopt for {pet.price}G
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          data-testid={`equip-pet-${pet.id}`}
+                          onClick={() => {
+                            onEquipPet(equipped ? null : pet.id);
+                            setFeedback(
+                              equipped ? `Dismissed ${pet.name}.` : `Summoned ${pet.name} to follow you!`
+                            );
+                          }}
+                          className={`font-pixel text-xs px-4 py-1.5 border cursor-pointer ${
+                            equipped
+                              ? 'bg-[#2d2544] text-[#fca5a5] border-[#ef4444]'
+                              : 'bg-[#22c55e] text-[#0e0b16] border-[#0e0b16] hover:bg-[#4ade80]'
+                          }`}
+                        >
+                          {equipped ? 'Unequip' : 'Equip Familiar'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {tab === 'arena' && (
+            <div className="flex flex-col gap-3" data-testid="arena-trials-list">
+              <div className="text-xs text-[#cbd5e1] bg-[#0e0b16] border border-[#4b3f6b] px-3 py-2">
+                Challenge sequential Multi-Boss Gauntlets! You restore +25% HP &amp; MP between arena waves, and defeat safely returns you to camp without losing your run.
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {ARENA_TRIALS.map((trial) => {
+                  const unlocked = player.highestZone >= trial.minHighestZone;
+                  const cleared = completedArenas.includes(trial.id);
+                  const rMeta = RARITY_META[trial.guaranteedRarity];
+                  return (
+                    <div
+                      key={trial.id}
+                      className="p-3.5 bg-[#0e0b16] border-2 flex flex-col justify-between gap-3"
+                      style={{ borderColor: unlocked ? rMeta.border : '#2d2544' }}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-pixel text-xs" style={{ color: rMeta.color }}>
+                            {trial.name}
+                          </span>
+                          {cleared && <Check className="w-4 h-4 text-[#4ade80] shrink-0" />}
+                        </div>
+                        <p className="text-[11px] text-[#cbd5e1] mt-1 leading-snug">
+                          {trial.subtitle}
+                        </p>
+                        <div className="mt-2 space-y-1 text-[11px] font-mono-num">
+                          <div className="text-[#f7c948]">
+                            Reward: +{trial.bonusGold}G · +{trial.bonusXp} XP
+                          </div>
+                          <div style={{ color: rMeta.color }}>
+                            Guaranteed: Lv.{trial.rewardZoneLevel} {rMeta.label} Gear
+                          </div>
+                          {!unlocked && (
+                            <div className="text-[#fb7185]">
+                              Requires reaching Zone {trial.minHighestZone}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        data-testid={`start-arena-${trial.id}`}
+                        disabled={!unlocked}
+                        onClick={() => onStartArenaTrial(trial.id)}
+                        className="w-full font-pixel text-xs py-2 bg-[#fb7185] text-[#0e0b16] border border-[#0e0b16] hover:bg-[#fda4af] disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer"
+                      >
+                        {cleared ? 'Replay Gauntlet' : 'Enter Arena'}
+                      </button>
                     </div>
                   );
                 })}

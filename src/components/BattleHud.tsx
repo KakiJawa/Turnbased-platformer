@@ -29,9 +29,10 @@ import {
   getComboBonuses,
   getEffectivePlayerCombatStats,
   getEquippedSkillsList,
+  getLivingFieldEnemies,
   getUnlockedConsumables,
 } from '../game/battleEngine';
-import { BRANCH_META, STAT_LABELS } from '../game/data';
+import { BRANCH_META, PET_CATALOG, STAT_LABELS, TIER3_SPECIALIZATIONS } from '../game/data';
 import { getSkillById } from '../game/rpgLogic';
 import { PlayerState, StatKey } from '../game/types';
 import { getWeatherCombatEffect, getZoneWeatherProfile } from '../game/weather';
@@ -45,6 +46,7 @@ interface BattleHudProps {
   onToggleMute: () => void;
   onToggleInspectEnemy: (open: boolean) => void;
   onToggleShowItems: () => void;
+  onSelectTarget: (uid: string) => void;
   onAction: (
     action:
       | { kind: 'attack' }
@@ -93,10 +95,15 @@ export function BattleHud({
   onToggleMute,
   onToggleInspectEnemy,
   onToggleShowItems,
+  onSelectTarget,
   onAction,
   onQteTrigger,
 }: BattleHudProps) {
   const enemy = getActiveEnemy(battle);
+  const livingEnemies = getLivingFieldEnemies(battle);
+  const equippedPet = player.equippedPetId
+    ? PET_CATALOG.find((p) => p.id === player.equippedPetId)
+    : undefined;
   const pStats = getEffectivePlayerCombatStats(player, battle);
   const weatherProfile = getZoneWeatherProfile(battle.zone);
   const weatherFx = getWeatherCombatEffect(battle.zone);
@@ -130,21 +137,30 @@ export function BattleHud({
   const executeReady = canUseStaggerExecute(battle);
 
   const activePassives: string[] = [];
+  if (player.classTier === 3 && player.tier3Branch) {
+    activePassives.push(TIER3_SPECIALIZATIONS[player.tier3Branch].traitName);
+  }
   if (player.unlockedSkillIds.includes('phy_t1_might') || player.unlockedSkillIds.includes('phy_t2_mastery')) {
     activePassives.push('Crit Surge');
   }
+  if (player.unlockedSkillIds.includes('phy_t2_cascade')) activePassives.push('Cascade');
   if (player.unlockedSkillIds.includes('mag_t1_focus') || player.unlockedSkillIds.includes('mag_t2_sage')) {
     activePassives.push('Mana Flow');
   }
+  if (player.unlockedSkillIds.includes('mag_t2_resonance')) activePassives.push('Resonance');
   if (player.unlockedSkillIds.includes('def_t1_plate') || player.unlockedSkillIds.includes('def_t2_bulwark')) {
     activePassives.push('Thorns');
   }
+  if (player.unlockedSkillIds.includes('def_t2_riposte')) activePassives.push('Riposte');
+  if (player.unlockedSkillIds.includes('sup_t2_momentum')) activePassives.push('Cadence');
   if (player.unlockedSkillIds.includes('spd_t1_step') || player.unlockedSkillIds.includes('spd_t2_phantom')) {
     activePassives.push('Shadow Step');
   }
+  if (player.unlockedSkillIds.includes('spd_t3_tempo')) activePassives.push('Flurry');
   if (player.unlockedSkillIds.includes('all_t1_seed') || player.unlockedSkillIds.includes('all_t2_awakening')) {
     activePassives.push('Harvest');
   }
+  if (player.unlockedSkillIds.includes('all_t3_overdrive')) activePassives.push('Overdrive');
 
   return (
     <div className="fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-3 md:p-4">
@@ -251,6 +267,15 @@ export function BattleHud({
             )}
           </div>
 
+          {equippedPet && (
+            <div className="mt-1 pt-1 border-t border-[#4b3f6b]/40 flex items-center justify-between text-[10px] font-mono-num">
+              <span style={{ color: equippedPet.accent }}>{equippedPet.name}</span>
+              <span className="text-[#e6d8bd]">
+                Assist in {Math.max(1, equippedPet.assistEveryTurns - battle.petTurnCounter)}t
+              </span>
+            </div>
+          )}
+
           {activePassives.length > 0 && (
             <div className="mt-1 pt-1 border-t border-[#4b3f6b]/40 flex flex-wrap gap-1">
               {activePassives.map((p) => (
@@ -351,8 +376,10 @@ export function BattleHud({
               <Flame className="w-3.5 h-3.5 shrink-0" style={{ color: weatherFx.accent }} />
             ) : weatherProfile.kind === 'leaves' ? (
               <Wind className="w-3.5 h-3.5 shrink-0" style={{ color: weatherFx.accent }} />
-            ) : weatherProfile.kind === 'arcane_ash' ? (
+            ) : weatherProfile.kind === 'arcane_ash' || weatherProfile.kind === 'void_rift' ? (
               <Zap className="w-3.5 h-3.5 shrink-0" style={{ color: weatherFx.accent }} />
+            ) : weatherProfile.kind === 'starfall' ? (
+              <Sparkles className="w-3.5 h-3.5 shrink-0" style={{ color: weatherFx.accent }} />
             ) : (
               <Sun className="w-3.5 h-3.5 shrink-0" style={{ color: weatherFx.accent }} />
             )}
@@ -362,6 +389,20 @@ export function BattleHud({
               {weatherFx.shortEffect}
             </span>
           </div>
+
+          {enemy && enemy.rarity === 'boss' && (enemy.bossPhase > 1 || enemy.shieldHits > 0) && (
+            <div
+              data-testid="boss-phase-badge"
+              className={`px-2.5 py-1 border font-pixel text-[10px] shadow-[0_3px_0_#0e0b16] ${
+                enemy.enraged
+                  ? 'bg-[#3d1221]/95 border-[#f43f5e] text-[#fecdd3]'
+                  : 'bg-[#292214]/95 border-[#facc15] text-[#fef08a]'
+              }`}
+            >
+              {enemy.enraged ? 'PHASE 3 ENRAGED!' : `PHASE ${enemy.bossPhase}`}
+              {enemy.shieldHits > 0 ? ` · BARRIER x${enemy.shieldHits}` : ''}
+            </div>
+          )}
 
           {/* Translucent Scrolling Classic RPG Combat Log Feed */}
           <div
@@ -543,6 +584,35 @@ export function BattleHud({
 
       {/* Bottom-Center Juicy Battle Action Deck */}
       <div className="pointer-events-auto self-center w-full max-w-4xl flex flex-col items-center gap-2">
+        {/* Multi-Target Selector Bar when adds / dual enemies are on the field */}
+        {livingEnemies.length > 1 && (
+          <div
+            data-testid="target-selector-bar"
+            className="flex flex-wrap items-center justify-center gap-1.5 bg-[#1b162b]/95 border border-[#4b3f6b] px-2.5 py-1 shadow-[0_3px_0_#0e0b16]"
+          >
+            <span className="font-pixel text-[10px] text-[#e6d8bd] mr-1">
+              TARGET [TAB]:
+            </span>
+            {livingEnemies.map((fe) => {
+              const isSelected = enemy?.uid === fe.uid;
+              return (
+                <button
+                  key={fe.uid}
+                  type="button"
+                  onClick={() => onSelectTarget(fe.uid)}
+                  className={`font-pixel text-[10px] px-2 py-0.5 border cursor-pointer ${
+                    isSelected
+                      ? 'bg-[#f7c948] text-[#0e0b16] border-[#0e0b16]'
+                      : 'bg-[#2d2544] text-[#cbd5e1] border-[#4b3f6b] hover:border-[#f7c948]'
+                  }`}
+                >
+                  {fe.name} ({fe.currentHp}/{fe.stats.hp})
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* Combo Finisher & Stagger Execute Bar (Appears at 3+ Combo) */}
         {battle.comboCount >= 3 && (
           <div className="flex flex-wrap items-center justify-center gap-2 animate-juicy-pop">

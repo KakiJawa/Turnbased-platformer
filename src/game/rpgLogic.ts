@@ -4,8 +4,10 @@ import {
   HERO_BASE_BONUS,
   HERO_GROWTH_PER_LEVEL,
   MATERIAL_META,
+  PET_CATALOG,
   SKILL_TREE,
   STAT_LABELS,
+  TIER3_SPECIALIZATIONS,
   VILLAGER_BASE_STATS,
   VILLAGER_GROWTH_PER_LEVEL,
 } from './data';
@@ -13,6 +15,7 @@ import { RARITY_META, RARITY_ORDER } from './palette';
 import {
   ActiveBuff,
   Affix,
+  ArenaTrialDefinition,
   CombatEnemy,
   ConsumableItem,
   EnemyRarity,
@@ -25,10 +28,12 @@ import {
   SkillDefinition,
   StatKey,
   Stats,
+  Tier3SpecializationId,
 } from './types';
 
 export const MAX_EQUIPPED_SKILLS = 6;
 export const MAX_TIER1_LEVEL = 20;
+export const TIER3_UNLOCK_HERO_LEVEL = 10; // Total Character Lv. 30+ (20 Villager + 10 Hero)
 export const MAX_ENCHANT_LEVEL = 10;
 
 let idCounter = 1;
@@ -67,6 +72,8 @@ export function createInitialPlayer(): PlayerState {
       ironShard: 0,
       orcFang: 0,
       dragonScale: 0,
+      starlightOre: 0,
+      voidEssence: 0,
     },
     equipment: {
       weapon: starterWeapon,
@@ -95,22 +102,39 @@ export function createInitialPlayer(): PlayerState {
         quantity: 2,
       },
     ],
+    ownedPetIds: [],
+    equippedPetId: null,
+    completedArenaIds: [],
     highestZone: 1,
     monstersDefeated: 0,
   };
 }
 
-export function getXpToNextLevel(level: number, classTier: 1 | 2): number {
+export function getTotalCharacterLevel(player: Pick<PlayerState, 'classTier' | 'level'>): number {
+  if (player.classTier === 1) return player.level;
+  if (player.classTier === 2) return MAX_TIER1_LEVEL + player.level;
+  return MAX_TIER1_LEVEL + TIER3_UNLOCK_HERO_LEVEL + player.level;
+}
+
+export function getXpToNextLevel(level: number, classTier: 1 | 2 | 3): number {
   if (classTier === 1) {
     // Smooth progression from Lv 1 -> 20
     return Math.round(45 + level * 22 + Math.pow(level, 1.55) * 6);
   }
-  // Tier 2 Hero: noticeably steeper XP curve than Tier 1 Villager
-  return Math.round(280 + level * 110 + Math.pow(level, 1.9) * 32);
+  if (classTier === 2) {
+    // Tier 2 Hero: noticeably steeper XP curve than Tier 1 Villager
+    return Math.round(280 + level * 110 + Math.pow(level, 1.9) * 32);
+  }
+  // Tier 3 Endgame Specialization
+  return Math.round(900 + level * 260 + Math.pow(level, 2.0) * 65);
 }
 
 export function canAdvanceClass(player: PlayerState): boolean {
   return player.classTier === 1 && player.level >= MAX_TIER1_LEVEL;
+}
+
+export function canAdvanceToTier3(player: PlayerState): boolean {
+  return player.classTier === 2 && getTotalCharacterLevel(player) >= 30;
 }
 
 export function advanceToHeroClass(player: PlayerState): PlayerState {
@@ -122,6 +146,28 @@ export function advanceToHeroClass(player: PlayerState): PlayerState {
     level: 1,
     xp: 0,
     skillPoints: player.skillPoints + 2, // Bonus 2 points on advancement!
+  };
+  const newStats = computePlayerStats(updated);
+  updated.currentHp = newStats.hp;
+  updated.currentMp = newStats.mp;
+  updated.currentStagger = updated.maxStagger;
+  return updated;
+}
+
+export function advanceToTier3Class(
+  player: PlayerState,
+  branch: Tier3SpecializationId
+): PlayerState {
+  if (!canAdvanceToTier3(player)) return player;
+  const spec = TIER3_SPECIALIZATIONS[branch];
+  const updated: PlayerState = {
+    ...player,
+    classTier: 3,
+    tier3Branch: branch,
+    className: spec.name,
+    level: 1,
+    xp: 0,
+    skillPoints: player.skillPoints + 3,
   };
   const newStats = computePlayerStats(updated);
   updated.currentHp = newStats.hp;
@@ -185,7 +231,7 @@ export function computePlayerStats(
   const stats: Stats = { ...VILLAGER_BASE_STATS };
 
   // Level growth: if Tier 1, apply Villager growth for levels gained.
-  // If Tier 2 Hero, keep the full Lv. 20 Villager base + Hero Base Bonus + Hero growth per level!
+  // If Tier 2/3, keep full Villager base + Hero Base Bonus + Hero growth + Tier 3 specialization!
   const villagerLevels =
     player.classTier === 1 ? player.level - 1 : MAX_TIER1_LEVEL - 1;
   for (const [k, perLv] of Object.entries(VILLAGER_GROWTH_PER_LEVEL)) {
@@ -193,15 +239,42 @@ export function computePlayerStats(
     stats[key] += (perLv ?? 0) * villagerLevels;
   }
 
-  if (player.classTier === 2) {
+  if (player.classTier >= 2) {
     for (const [k, bonus] of Object.entries(HERO_BASE_BONUS)) {
       const key = k as StatKey;
       stats[key] += bonus ?? 0;
     }
-    const heroLevels = player.level - 1;
+    const heroLevels =
+      player.classTier === 2
+        ? player.level - 1
+        : TIER3_UNLOCK_HERO_LEVEL - 1;
     for (const [k, perLv] of Object.entries(HERO_GROWTH_PER_LEVEL)) {
       const key = k as StatKey;
       stats[key] += (perLv ?? 0) * heroLevels;
+    }
+  }
+
+  if (player.classTier === 3 && player.tier3Branch) {
+    const spec = TIER3_SPECIALIZATIONS[player.tier3Branch];
+    for (const [k, bonus] of Object.entries(spec.statBonus)) {
+      const key = k as StatKey;
+      stats[key] += bonus ?? 0;
+    }
+    const t3Levels = player.level - 1;
+    for (const [k, perLv] of Object.entries(spec.growthPerLevel)) {
+      const key = k as StatKey;
+      stats[key] += (perLv ?? 0) * t3Levels;
+    }
+  }
+
+  // Equipped Pet Familiar passive stat bonus
+  if (player.equippedPetId) {
+    const pet = PET_CATALOG.find((p) => p.id === player.equippedPetId);
+    if (pet) {
+      for (const [k, val] of Object.entries(pet.statBonus)) {
+        const key = k as StatKey;
+        stats[key] += val ?? 0;
+      }
     }
   }
 
@@ -452,6 +525,8 @@ export function bulkDisposeInventory(
     'ironShard',
     'orcFang',
     'dragonScale',
+    'starlightOre',
+    'voidEssence',
   ];
 
   for (const item of player.inventory) {
@@ -466,7 +541,7 @@ export function bulkDisposeInventory(
         );
         const matId = tierMaterialMap[matIdx];
         const amt = item.rarity === 'uncommon' ? 2 : 1;
-        nextMaterials[matId] += amt;
+        nextMaterials[matId] = (nextMaterials[matId] ?? 0) + amt;
         materialsGained[matId] = (materialsGained[matId] ?? 0) + amt;
         goldGained += Math.max(2, Math.floor(item.sellValue * 0.25));
       }
@@ -650,22 +725,80 @@ export function rollRarityForEnemy(
     return 'uncommon';
   }
 
-  // Zone 7+: Rare to Mythic
-  if (enemyRarity === 'boss') {
-    if (r < 0.08) return 'mythic';
-    if (r < 0.35) return 'legendary';
-    if (r < 0.8) return 'epic';
+  // Zone 7 - 8: Rare to Mythic
+  if (zone <= 8) {
+    if (enemyRarity === 'boss') {
+      if (r < 0.08) return 'mythic';
+      if (r < 0.35) return 'legendary';
+      if (r < 0.8) return 'epic';
+      return 'rare';
+    }
+    if (enemyRarity === 'elite') {
+      if (r < 0.02) return 'mythic';
+      if (r < 0.18) return 'legendary';
+      if (r < 0.65) return 'epic';
+      return 'rare';
+    }
+    if (r < 0.05) return 'legendary';
+    if (r < 0.38) return 'epic';
     return 'rare';
+  }
+
+  // Zone 9 - 10 Endgame: Elevated Mythic & Legendary loot
+  if (enemyRarity === 'boss') {
+    if (r < 0.22) return 'mythic';
+    if (r < 0.62) return 'legendary';
+    return 'epic';
   }
   if (enemyRarity === 'elite') {
-    if (r < 0.02) return 'mythic';
-    if (r < 0.18) return 'legendary';
-    if (r < 0.65) return 'epic';
-    return 'rare';
+    if (r < 0.08) return 'mythic';
+    if (r < 0.35) return 'legendary';
+    return 'epic';
   }
-  if (r < 0.05) return 'legendary';
-  if (r < 0.38) return 'epic';
+  if (r < 0.14) return 'legendary';
+  if (r < 0.58) return 'epic';
   return 'rare';
+}
+
+export function buyPetFamiliar(
+  player: PlayerState,
+  petId: string
+): { success: boolean; player: PlayerState; reason?: string } {
+  const pet = PET_CATALOG.find((p) => p.id === petId);
+  if (!pet) return { success: false, player, reason: 'Pet not found.' };
+  const owned = player.ownedPetIds ?? [];
+  if (owned.includes(petId)) {
+    return { success: false, player, reason: `${pet.name} is already adopted.` };
+  }
+  if (player.gold < pet.price) {
+    return { success: false, player, reason: `Need ${pet.price} Gold.` };
+  }
+  const next: PlayerState = {
+    ...player,
+    gold: player.gold - pet.price,
+    ownedPetIds: [...owned, petId],
+    equippedPetId: petId, // Automatically equip newly adopted pet!
+  };
+  const stats = computePlayerStats(next);
+  next.currentHp = Math.min(stats.hp, next.currentHp + (pet.statBonus.hp ?? 0));
+  next.currentMp = Math.min(stats.mp, next.currentMp + (pet.statBonus.mp ?? 0));
+  return { success: true, player: next };
+}
+
+export function equipPetFamiliar(player: PlayerState, petId: string | null): PlayerState {
+  if (petId === null) {
+    const next = { ...player, equippedPetId: null };
+    const stats = computePlayerStats(next);
+    next.currentHp = Math.min(stats.hp, next.currentHp);
+    next.currentMp = Math.min(stats.mp, next.currentMp);
+    return next;
+  }
+  if (!(player.ownedPetIds ?? []).includes(petId)) return player;
+  const next = { ...player, equippedPetId: petId };
+  const stats = computePlayerStats(next);
+  next.currentHp = Math.min(stats.hp, next.currentHp);
+  next.currentMp = Math.min(stats.mp, next.currentMp);
+  return next;
 }
 
 export function getEnchantCost(item: EquipmentItem): {
@@ -681,10 +814,12 @@ export function getEnchantCost(item: EquipmentItem): {
     'ironShard',
     'orcFang',
     'dragonScale',
+    'starlightOre',
+    'voidEssence',
   ];
   const matIdx = Math.min(
     materialOrder.length - 1,
-    Math.max(0, item.tierLevel - 1 + (item.level >= 5 ? 1 : 0))
+    Math.max(0, Math.floor((item.tierLevel - 1) / 1.5) + (item.level >= 6 ? 1 : 0))
   );
   return {
     gold,
@@ -701,7 +836,11 @@ export function getReforgeCost(item: EquipmentItem): {
   const tierIdx = RARITY_ORDER.indexOf(item.rarity) + 1;
   const gold = Math.round(35 * tierIdx * (1 + (item.tierLevel - 1) * 0.4));
   const matId: MaterialId =
-    item.tierLevel >= 4
+    item.tierLevel >= 10
+      ? 'voidEssence'
+      : item.tierLevel >= 9
+      ? 'starlightOre'
+      : item.tierLevel >= 4
       ? 'dragonScale'
       : item.tierLevel === 3
       ? 'orcFang'
@@ -829,6 +968,12 @@ export function spawnEnemyFromTemplate(
     specialName: tpl.specialName,
     specialMult: tpl.specialMult,
     specialStagger: tpl.specialStagger,
+    enragedSpecialName: tpl.enragedSpecialName,
+    summonTemplateId: tpl.summonTemplateId,
+    bossPhase: 1,
+    enraged: false,
+    shieldHits: 0,
+    summonedOnce: false,
     buffs: [],
     xpReward: tpl.xpReward,
     goldReward: gold,
@@ -870,6 +1015,10 @@ export function spawnEnemyWave(
     }
   }
   return wave;
+}
+
+export function spawnArenaBossWave(trial: ArenaTrialDefinition): CombatEnemy[] {
+  return trial.bossTemplateIds.map((id) => spawnEnemyFromTemplate(id));
 }
 
 export interface DamageResult {

@@ -15,12 +15,17 @@ export interface PlatformerPlayer {
   scaleX: number;
   scaleY: number;
   cameraX: number;
+  invulnTimer: number;
+  petX: number;
+  petY: number;
 }
 
 export interface PlatformerStepResult {
   collectedGold: number;
   collectedMaterial: { id: NonNullable<WorldEntity['materialId']>; amount: number } | null;
   jumped: boolean;
+  bounced: boolean;
+  hazardDamagePct: number;
   nearbyInteractable: WorldEntity | null;
   triggeredEnemy: WorldEntity | null;
 }
@@ -41,6 +46,9 @@ export function createPlatformerPlayer(): PlatformerPlayer {
     scaleX: 1,
     scaleY: 1,
     cameraX: 0,
+    invulnTimer: 0,
+    petX: 48,
+    petY: 222,
   };
 }
 
@@ -64,6 +72,10 @@ export function stepPlatformer(
   let collectedGold = 0;
   let collectedMaterial: PlatformerStepResult['collectedMaterial'] = null;
   let jumped = false;
+  let bounced = false;
+  let hazardDamagePct = 0;
+
+  player.invulnTimer = Math.max(0, player.invulnTimer - dt);
 
   // Horizontal movement
   const dir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
@@ -141,7 +153,7 @@ export function stepPlatformer(
   player.scaleX += (1 - player.scaleX) * Math.min(1, dt * 14);
   player.scaleY += (1 - player.scaleY) * Math.min(1, dt * 14);
 
-  // Patrol enemies & check pickups / encounters
+  // Patrol enemies & check pickups / props / hazards / encounters
   let nearbyInteractable: WorldEntity | null = null;
   let triggeredEnemy: WorldEntity | null = null;
 
@@ -172,12 +184,31 @@ export function stepPlatformer(
       if (ent.materialId) {
         collectedMaterial = { id: ent.materialId, amount: ent.amount ?? 1 };
       }
+    } else if (ent.kind === 'bounce_pad' && dx < 16 && dy < 16 && player.vy >= -40) {
+      player.vy = ent.bounceVelocity ?? -415;
+      player.onGround = false;
+      player.coyoteTimer = 0;
+      player.scaleX = 0.78;
+      player.scaleY = 1.25;
+      bounced = true;
+    } else if (
+      ent.kind === 'hazard' &&
+      player.invulnTimer <= 0 &&
+      dx < ent.w * 0.5 + 4 &&
+      dy < 16
+    ) {
+      hazardDamagePct = ent.hazardDamagePct ?? 8;
+      player.invulnTimer = 0.9;
+      player.vy = -175;
+      player.vx = -player.facing * 95;
+      player.onGround = false;
     } else if (ent.kind === 'enemy' && !ent.defeated && dx < 20 && dy < 28) {
       triggeredEnemy = ent;
     } else if (
       (ent.kind === 'fireplace' ||
         ent.kind === 'shop' ||
         (ent.kind === 'chest' && !ent.opened) ||
+        (ent.kind === 'shrine' && !ent.used) ||
         ent.kind === 'portal') &&
       dx < 30 &&
       dy < 32
@@ -185,6 +216,12 @@ export function stepPlatformer(
       nearbyInteractable = ent;
     }
   }
+
+  // Smooth Pet companion follow trail
+  const targetPetX = player.x - player.facing * 20;
+  const targetPetY = player.y - 6;
+  player.petX += (targetPetX - player.petX) * Math.min(1, dt * 6);
+  player.petY += (targetPetY - player.petY) * Math.min(1, dt * 6);
 
   // Smooth camera clamping inside 480x270 viewport
   const targetCam = Math.max(0, Math.min(stage.width - 480, player.x - 190));
@@ -194,6 +231,8 @@ export function stepPlatformer(
     collectedGold,
     collectedMaterial,
     jumped,
+    bounced,
+    hazardDamagePct,
     nearbyInteractable,
     triggeredEnemy,
   };

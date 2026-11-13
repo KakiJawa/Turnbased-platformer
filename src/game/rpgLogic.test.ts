@@ -3,16 +3,22 @@ import assert from 'node:assert/strict';
 import {
   MAX_EQUIPPED_SKILLS,
   MAX_TIER1_LEVEL,
+  TIER3_UNLOCK_HERO_LEVEL,
   advanceToHeroClass,
+  advanceToTier3Class,
   bulkDisposeInventory,
+  buyPetFamiliar,
   calculateDamage,
   canAdvanceClass,
+  canAdvanceToTier3,
   compareEquipmentStats,
   computePlayerStats,
   createInitialPlayer,
   enchantEquipment,
+  equipPetFamiliar,
   generateEquipment,
   getRespecCost,
+  getTotalCharacterLevel,
   getXpToNextLevel,
   grantXp,
   loadSkillPreset,
@@ -20,11 +26,12 @@ import {
   respecSkills,
   rollRarityForEnemy,
   saveSkillPreset,
+  spawnArenaBossWave,
   spawnEnemyWave,
   toggleEquipSkill,
   unlockSkillNode,
 } from './rpgLogic';
-import { SKILL_TREE } from './data';
+import { ARENA_TRIALS, PET_CATALOG, SKILL_TREE } from './data';
 
 test('Villager starts at Lv.1, advances to Hero at Lv.20 with steeper XP and higher growth', () => {
   let p = createInitialPlayer();
@@ -106,7 +113,15 @@ test('Tiered equipment Common -> Mythic scales affixes and Blacksmith enchant/re
   assert.equal(mythic.affixes.length, 5);
   assert.ok((mythic.baseStats.atk ?? 0) > (common.baseStats.atk ?? 0) * 2.5);
 
-  const mats = { feather: 10, hide: 10, ironShard: 5, orcFang: 5, dragonScale: 5 };
+  const mats = {
+    feather: 10,
+    hide: 10,
+    ironShard: 5,
+    orcFang: 5,
+    dragonScale: 5,
+    starlightOre: 5,
+    voidEssence: 5,
+  };
   const ench = enchantEquipment(mythic, 2000, mats);
   assert.equal(ench.success, true);
   assert.equal(ench.item.level, 1);
@@ -153,7 +168,7 @@ test('Staggered targets take 1.5x damage and wave spawner creates 1-3 enemies', 
   assert.equal(bossWave[0].rarity, 'boss');
 });
 
-test('Zone-gated equipment rarity strictly limits Zones 1-3 to Common-Rare, 4-6 to Uncommon-Epic, 7-8 to Rare-Mythic', () => {
+test('Zone-gated equipment rarity strictly limits Zones 1-3, 4-6, 7-8, and boosts 9-10 Mythics', () => {
   const samples = [0.0, 0.01, 0.05, 0.15, 0.3, 0.5, 0.75, 0.99];
   const enemyRarities: ('normal' | 'elite' | 'boss')[] = ['normal', 'elite', 'boss'];
 
@@ -193,6 +208,13 @@ test('Zone-gated equipment rarity strictly limits Zones 1-3 to Common-Rare, 4-6 
     }
     assert.equal(rollRarityForEnemy('boss', zone, () => 0.01), 'mythic');
     assert.equal(rollRarityForEnemy('boss', zone, () => 0.15), 'legendary');
+  }
+
+  // Zones 9-10 never drop lower than Rare on normals or Epic on bosses/elites
+  for (const zone of [9, 10]) {
+    assert.equal(rollRarityForEnemy('boss', zone, () => 0.18), 'mythic');
+    assert.equal(rollRarityForEnemy('boss', zone, () => 0.55), 'legendary');
+    assert.equal(rollRarityForEnemy('normal', zone, () => 0.95), 'rare');
   }
 });
 
@@ -253,4 +275,57 @@ test('Skill respec refunds points for gold and loadout presets save/load cleanly
   assert.equal(res.player.skillPoints, 4);
   assert.equal(res.player.gold, 200 - cost);
   assert.deepEqual(res.player.unlockedSkillIds, ['phy_t1_slash']);
+});
+
+test('Tier 3 Class Specialization unlocks at Total Character Lv. 30+ and boosts stats & skills', () => {
+  let p = createInitialPlayer();
+  p = grantXp(p, 50000).player;
+  let hero = advanceToHeroClass(p);
+  assert.equal(getTotalCharacterLevel(hero), 21);
+  assert.equal(canAdvanceToTier3(hero), false);
+
+  hero.level = TIER3_UNLOCK_HERO_LEVEL; // Hero Lv.10 => Total Lv.30
+  assert.equal(getTotalCharacterLevel(hero), 30);
+  assert.equal(canAdvanceToTier3(hero), true);
+
+  const heroStatsBefore = computePlayerStats(hero);
+  const spellblade = advanceToTier3Class(hero, 'spellblade');
+  assert.equal(spellblade.classTier, 3);
+  assert.equal(spellblade.tier3Branch, 'spellblade');
+  assert.equal(spellblade.className, 'Astral Spellblade');
+  assert.equal(spellblade.skillPoints, hero.skillPoints + 3);
+
+  const t3Stats = computePlayerStats(spellblade);
+  assert.ok(t3Stats.matk > heroStatsBefore.matk + 30);
+  assert.ok(t3Stats.hp >= heroStatsBefore.hp + 140);
+  assert.ok(getXpToNextLevel(1, 3) > getXpToNextLevel(1, 2));
+});
+
+test('Pet Familiars can be purchased with gold, equipped, and grant passive stats; Arena spawns boss waves', () => {
+  let p = createInitialPlayer();
+  const drake = PET_CATALOG.find((pet) => pet.id === 'pet_drake')!;
+  const broke = buyPetFamiliar(p, drake.id);
+  assert.equal(broke.success, false);
+
+  p.gold = 5000;
+  const statsBefore = computePlayerStats(p);
+  const adopted = buyPetFamiliar(p, drake.id);
+  assert.equal(adopted.success, true);
+  assert.equal(adopted.player.gold, 5000 - drake.price);
+  assert.equal(adopted.player.equippedPetId, drake.id);
+  assert.ok(adopted.player.ownedPetIds.includes(drake.id));
+
+  const statsWithPet = computePlayerStats(adopted.player);
+  assert.ok(statsWithPet.atk > statsBefore.atk);
+  assert.ok(statsWithPet.matk > statsBefore.matk);
+
+  const unequipped = equipPetFamiliar(adopted.player, null);
+  assert.equal(unequipped.equippedPetId, null);
+  assert.equal(computePlayerStats(unequipped).atk, statsBefore.atk);
+
+  // Arena trial spawns exact sequence of bosses
+  const apex = ARENA_TRIALS.find((t) => t.id === 'arena_apex')!;
+  const bossWave = spawnArenaBossWave(apex);
+  assert.equal(bossWave.length, apex.bossTemplateIds.length);
+  assert.ok(bossWave.every((b) => b.rarity === 'boss'));
 });

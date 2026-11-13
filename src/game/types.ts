@@ -59,6 +59,8 @@ export interface MaterialCounts {
   ironShard: number;
   orcFang: number;
   dragonScale: number;
+  starlightOre: number;
+  voidEssence: number;
 }
 
 export type MaterialId = keyof MaterialCounts;
@@ -92,13 +94,60 @@ export interface ActiveBuff {
   potency: number; // percentage or flat value
 }
 
+export type Tier3SpecializationId = 'vanguard' | 'spellblade' | 'shadowstrider';
+
+export interface Tier3SpecializationMeta {
+  id: Tier3SpecializationId;
+  name: string;
+  title: string;
+  accent: string;
+  description: string;
+  traitName: string;
+  traitDesc: string;
+  statBonus: Partial<Stats>;
+  growthPerLevel: Partial<Stats>;
+}
+
+export type PetSpriteId =
+  | 'pet_chick'
+  | 'pet_pup'
+  | 'pet_wisp'
+  | 'pet_turtle'
+  | 'pet_drake';
+
+export interface PetDefinition {
+  id: string;
+  sprite: PetSpriteId;
+  name: string;
+  price: number;
+  accent: string;
+  statBonus: Partial<Stats>;
+  assistEveryTurns: number;
+  assistName: string;
+  assistDesc: string;
+  assistKind: 'physical' | 'magical_burn' | 'heal_shield' | 'hybrid_ult';
+  assistPower: number;
+}
+
+export interface ArenaTrialDefinition {
+  id: string;
+  name: string;
+  subtitle: string;
+  minHighestZone: number;
+  bossTemplateIds: string[];
+  bonusGold: number;
+  bonusXp: number;
+  guaranteedRarity: Rarity;
+  rewardZoneLevel: number;
+}
+
 export interface SkillDefinition {
   id: string;
   name: string;
   description: string;
   branch: SkillBranch;
   kind: SkillNodeKind;
-  tierRequired: 1 | 2;
+  tierRequired: 1 | 2 | 3;
   prerequisiteIds: string[];
   costPoints: number;
   // Active / Ultimate properties
@@ -128,6 +177,9 @@ export type EnemyRarity = 'normal' | 'elite' | 'boss';
 export type SpriteId =
   | 'villager'
   | 'hero'
+  | 'hero_vanguard'
+  | 'hero_spellblade'
+  | 'hero_shadowstrider'
   | 'chicken'
   | 'pig'
   | 'cow'
@@ -143,7 +195,16 @@ export type SpriteId =
   | 'wyvern'
   | 'drake_knight'
   | 'magma'
-  | 'dragon_boss';
+  | 'dragon_boss'
+  | 'star_squid'
+  | 'star_sentinel'
+  | 'leviathan'
+  | 'starfall_boss'
+  | 'void_stalker'
+  | 'void_harbinger'
+  | 'void_warden'
+  | 'void_boss'
+  | PetSpriteId;
 
 export interface EnemyTemplate {
   id: string;
@@ -156,6 +217,9 @@ export interface EnemyTemplate {
   specialName: string;
   specialMult: number;
   specialStagger: number;
+  enragedSpecialName?: string;
+  summonTemplateId?: string;
+  dualPartnerId?: string;
   xpReward: number;
   goldReward: [number, number];
   materialDrop: { id: MaterialId; min: number; max: number };
@@ -181,6 +245,13 @@ export interface CombatEnemy {
   specialName: string;
   specialMult: number;
   specialStagger: number;
+  enragedSpecialName?: string;
+  summonTemplateId?: string;
+  bossPhase: 1 | 2 | 3;
+  enraged: boolean;
+  shieldHits: number;
+  summonedOnce?: boolean;
+  isAdd?: boolean;
   buffs: ActiveBuff[];
   xpReward: number;
   goldReward: number;
@@ -195,8 +266,9 @@ export interface SkillPreset {
 
 export interface PlayerState {
   name: string;
-  classTier: 1 | 2;
-  className: string; // 'Villager' | 'Vanguard Hero'
+  classTier: 1 | 2 | 3;
+  tier3Branch?: Tier3SpecializationId;
+  className: string; // 'Villager' | 'Vanguard Hero' | Tier 3 specialization
   level: number;
   xp: number;
   skillPoints: number;
@@ -214,6 +286,9 @@ export interface PlayerState {
   equipment: Record<EquipmentSlot, EquipmentItem | null>;
   inventory: EquipmentItem[];
   consumables: ConsumableItem[];
+  ownedPetIds: string[];
+  equippedPetId: string | null;
+  completedArenaIds: string[];
   highestZone: number;
   monstersDefeated: number;
 }
@@ -239,8 +314,10 @@ export interface PlatformRect {
   y: number;
   w: number;
   h: number;
-  kind: 'ground' | 'wood' | 'stone';
+  kind: 'ground' | 'wood' | 'stone' | 'crystal' | 'void';
 }
+
+export type HazardKind = 'thorns' | 'spikes' | 'lava' | 'void_rift';
 
 export type WorldObjectKind =
   | 'gold'
@@ -249,7 +326,10 @@ export type WorldObjectKind =
   | 'fireplace'
   | 'shop'
   | 'enemy'
-  | 'portal';
+  | 'portal'
+  | 'bounce_pad'
+  | 'hazard'
+  | 'shrine';
 
 export interface WorldEntity {
   id: string;
@@ -261,8 +341,12 @@ export interface WorldEntity {
   collected?: boolean;
   opened?: boolean;
   defeated?: boolean;
+  used?: boolean;
   amount?: number;
   materialId?: MaterialId;
+  hazardKind?: HazardKind;
+  hazardDamagePct?: number;
+  bounceVelocity?: number;
   enemyRarity?: EnemyRarity;
   enemySprite?: SpriteId;
   enemyName?: string;

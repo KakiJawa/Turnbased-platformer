@@ -8,7 +8,9 @@ export type WeatherKind =
   | 'embers'
   | 'snow'
   | 'arcane_ash'
-  | 'volcanic_storm';
+  | 'volcanic_storm'
+  | 'starfall'
+  | 'void_rift';
 
 export type TimeOfDay = 'morning' | 'afternoon' | 'overcast' | 'dusk' | 'night';
 
@@ -162,6 +164,36 @@ const ZONE_WEATHER_PROFILES: WeatherProfile[] = [
     width: 2,
     height: 2,
     lightningInterval: 8.5,
+  },
+  {
+    zone: 9,
+    kind: 'starfall',
+    timeOfDay: 'night',
+    label: 'Starfall Tide',
+    particleCount: 58,
+    colors: ['#38bdf8', '#7dd3fc', '#c084fc', '#e0f2fe'],
+    baseVx: -12,
+    baseVy: 48,
+    swayAmp: 10,
+    swayFreq: 2.0,
+    width: 2,
+    height: 3,
+    lightningInterval: 7.5,
+  },
+  {
+    zone: 10,
+    kind: 'void_rift',
+    timeOfDay: 'night',
+    label: 'Void Anomaly',
+    particleCount: 64,
+    colors: ['#c084fc', '#f43f5e', '#a855f7', '#ffffff'],
+    baseVx: 18,
+    baseVy: -42,
+    swayAmp: 20,
+    swayFreq: 3.4,
+    width: 2,
+    height: 3,
+    lightningInterval: 5.5,
   },
 ];
 
@@ -335,6 +367,42 @@ const WEATHER_COMBAT_EFFECTS: Record<WeatherKind, WeatherCombatEffect> = {
     mdefMult: 1,
     speedMult: 1,
   },
+  starfall: {
+    kind: 'starfall',
+    name: 'Starfall Surge',
+    summary: 'Cosmic starlight grants +8 MP/turn, +15% Magic DMG & +10% Stagger, but lowers MDEF by 12%.',
+    shortEffect: '+8 MP/t · +15% MAG · -12% MDEF',
+    tone: 'mixed',
+    accent: '#38bdf8',
+    mpRegenPerTurn: 8,
+    hpRegenPerTurn: 0,
+    fireResistDeltaPct: 10,
+    magicDmgMult: 1.15,
+    staggerMult: 1.1,
+    critBonus: 0,
+    critDmgBonus: 0,
+    dodgeBonus: 0,
+    mdefMult: 0.88,
+    speedMult: 1,
+  },
+  void_rift: {
+    kind: 'void_rift',
+    name: 'Void Singularity',
+    summary: 'Reality fracture grants +8% CRIT, +25% CRIT DMG & +18% Stagger, but lowers MDEF by 18%.',
+    shortEffect: '+8% CRIT · +25% CDMG · -18% MDEF',
+    tone: 'hazard',
+    accent: '#c084fc',
+    mpRegenPerTurn: 4,
+    hpRegenPerTurn: 0,
+    fireResistDeltaPct: -10,
+    magicDmgMult: 1.1,
+    staggerMult: 1.18,
+    critBonus: 8,
+    critDmgBonus: 25,
+    dodgeBonus: 0,
+    mdefMult: 0.82,
+    speedMult: 1.05,
+  },
 };
 
 export function getWeatherCombatEffect(zone: number): WeatherCombatEffect {
@@ -352,6 +420,7 @@ export function isFireSkillId(skillId: string): boolean {
   return (
     skillId === 'mag_t1_spark' ||
     skillId === 'mag_t1_ult' ||
+    skillId === 'mag_t3_supernova' ||
     skillId === 'all_t2_ult'
   );
 }
@@ -630,11 +699,11 @@ export class WeatherSystem {
       ctx.globalAlpha = alpha;
       ctx.fillStyle = color;
 
-      if (profile.kind === 'rain') {
+      if (profile.kind === 'rain' || profile.kind === 'starfall') {
         // Crisp 1px slanted streak (drawn as stepped 2px micro-segments for pixel fidelity)
         ctx.fillRect(x, y, 1, 3);
         ctx.fillRect(x - 1, y + 3, 1, 2);
-      } else if (profile.kind === 'leaves') {
+      } else if (profile.kind === 'leaves' || profile.kind === 'void_rift') {
         const w = layer === 'front' ? 3 : 2;
         const h = 2;
         ctx.fillRect(x, y, w, h);

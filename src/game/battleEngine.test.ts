@@ -9,6 +9,7 @@ import {
   getComboBonuses,
   resolveQteInput,
   stepBattleTimeline,
+  switchBattleTarget,
 } from './battleEngine';
 import { createInitialPlayer, spawnEnemyFromTemplate } from './rpgLogic';
 import { buildStage } from './stages';
@@ -17,6 +18,7 @@ import { createPlatformerPlayer, stepPlatformer } from './platformer';
 test('Stagger break reduces stagger to 0 and enters staggered state', () => {
   const player = createInitialPlayer();
   const enemy = spawnEnemyFromTemplate('farm_chicken');
+  enemy.stats.dodge = 0;
   enemy.currentStagger = 15; // Low stagger so next strike breaks it
   const battle = createBattleState(1, 'normal', 'z1_en_1', [enemy]);
 
@@ -409,4 +411,114 @@ test('Combat log records turn-stamped scrolling history (>6 entries) including c
   resolveQteInput(battle, player, false);
   assert.ok(battle.logs.some((l) => l.tone === 'crit'));
   assert.ok(battle.logs.length > 6 && battle.logs.length <= 40);
+});
+
+test('Multi-phase Boss enters Phase 2 Barrier + Summon <=55% HP and Phase 3 Enrage <=28% HP', () => {
+  const player = createInitialPlayer();
+  const boss = spawnEnemyFromTemplate('void_architect_boss');
+  const maxHp = boss.stats.hp;
+  const battle = createBattleState(10, 'boss', 'z10_boss', [boss]);
+  assert.equal(boss.bossPhase, 1);
+  assert.equal(boss.enraged, false);
+
+  // Drop HP to 54% and hit once -> Phase 2 Barrier + Summon
+  boss.currentHp = Math.round(maxHp * 0.54);
+  executePlayerAction(battle, player, { kind: 'attack' });
+  assert.equal(boss.bossPhase, 2);
+  assert.ok(boss.shieldHits > 0);
+  assert.ok(battle.adds.length >= 1, 'Expected boss Phase 2 to summon Void Stalker add');
+
+  // Drop HP to 25% and hit -> Phase 3 Enrage
+  battle.phase = 'player_turn';
+  boss.shieldHits = 0;
+  boss.currentHp = Math.round(maxHp * 0.25);
+  executePlayerAction(battle, player, { kind: 'attack' });
+  assert.equal(boss.bossPhase, 3);
+  assert.equal(boss.enraged, true);
+  assert.equal(boss.specialName, 'Entropy Collapse');
+});
+
+test('Dual encounters spawn partner add, allow target switching, and Pet Familiar triggers assist', () => {
+  const player = createInitialPlayer();
+  player.equippedPetId = 'pet_wisp';
+  player.ownedPetIds = ['pet_wisp'];
+  const bandit = spawnEnemyFromTemplate('forest_bandit'); // has dualPartnerId: 'forest_wolf'
+  bandit.stats.hp = 9999;
+  bandit.currentHp = 9999;
+  const battle = createBattleState(2, 'normal', 'z2_en_1', [bandit]);
+
+  assert.equal(battle.adds.length, 1);
+  assert.equal(battle.adds[0].name, 'Timber Wolf');
+  assert.equal(getActiveEnemy(battle).uid, bandit.uid);
+
+  // Switch target onto partner add
+  const switched = switchBattleTarget(battle);
+  assert.equal(switched?.uid, battle.adds[0].uid);
+  assert.equal(getActiveEnemy(battle).uid, battle.adds[0].uid);
+
+  // Execute 2 turns -> Ember Wisp (assistEveryTurns: 2) attacks & applies Burn
+  const addHpBefore = battle.adds[0].currentHp;
+  executePlayerAction(battle, player, { kind: 'guard' });
+  battle.phase = 'player_turn';
+  executePlayerAction(battle, player, { kind: 'guard' });
+  assert.ok(battle.adds[0].currentHp < addHpBefore, 'Ember Wisp should assist on 2nd turn');
+  assert.ok(battle.adds[0].buffs.some((b) => b.type === 'burn'));
+});
+
+test('Combo-Synergy passives: Parry Riposte, Inspiring Cadence, and Overdrive Convergence work', () => {
+  const player = createInitialPlayer();
+  player.unlockedSkillIds.push('def_t2_riposte', 'sup_t2_momentum', 'sup_t1_mend', 'all_t3_overdrive');
+  player.equippedSkillIds.push('sup_t1_mend');
+  const enemy = spawnEnemyFromTemplate('farm_cow_elite');
+  enemy.stats.hp = 9999;
+  enemy.currentHp = 9999;
+
+  // Overdrive Convergence starts battle with 2x Combo
+  const battle = createBattleState(1, 'elite', 'z1_en_syn', [enemy], { initialCombo: 2 });
+  assert.equal(battle.comboCount, 2);
+
+  // Parry Riposte grants +1 Combo on Guard
+  executePlayerAction(battle, player, { kind: 'guard' });
+  assert.equal(battle.comboCount, 3);
+
+  // Inspiring Cadence grants +1 Combo on Heal & shaves 1t off cooldowns at >=4x
+  battle.phase = 'player_turn';
+  battle.skillCooldowns['phy_t1_slash'] = 2;
+  executePlayerAction(battle, player, { kind: 'skill', skillId: 'sup_t1_mend' });
+  assert.equal(battle.comboCount, 4);
+  assert.equal(battle.skillCooldowns['phy_t1_slash'], 0); // -1 from turn action + -1 from Cadence
+});
+
+test('Zones 9-10 buildStage includes Bounce Pads, Hazards, Blessing Shrines and stepPlatformer triggers them', () => {
+  for (const z of [9, 10]) {
+    const stage = buildStage(z);
+    assert.equal(stage.zone, z);
+    assert.ok(stage.entities.some((e) => e.kind === 'bounce_pad'));
+    assert.ok(stage.entities.some((e) => e.kind === 'hazard'));
+    assert.ok(stage.entities.some((e) => e.kind === 'shrine'));
+  }
+
+  const stage9 = buildStage(9);
+  const bounce = stage9.entities.find((e) => e.kind === 'bounce_pad')!;
+  const hazard = stage9.entities.find((e) => e.kind === 'hazard')!;
+  const shrine = stage9.entities.find((e) => e.kind === 'shrine')!;
+
+  const p = createPlatformerPlayer();
+  p.x = bounce.x;
+  p.y = bounce.y;
+  const bounceRes = stepPlatformer(p, stage9, { left: false, right: false, jumpJustPressed: false, jumpHeld: false }, 0.016);
+  assert.equal(bounceRes.bounced, true);
+  assert.ok(p.vy < -350);
+
+  p.x = hazard.x;
+  p.y = hazard.y;
+  p.invulnTimer = 0;
+  const hazRes = stepPlatformer(p, stage9, { left: false, right: false, jumpJustPressed: false, jumpHeld: false }, 0.016);
+  assert.ok(hazRes.hazardDamagePct > 0);
+  assert.ok(p.invulnTimer > 0);
+
+  p.x = shrine.x;
+  p.y = shrine.y;
+  const shrineRes = stepPlatformer(p, stage9, { left: false, right: false, jumpJustPressed: false, jumpHeld: false }, 0.016);
+  assert.equal(shrineRes.nearbyInteractable?.kind, 'shrine');
 });

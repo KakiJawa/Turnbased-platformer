@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BattleHud } from './components/BattleHud';
 import { ExploreHud } from './components/ExploreHud';
-import { FireplaceTownModal } from './components/FireplaceTownModal';
+import { FireplaceTownModal, TownTab } from './components/FireplaceTownModal';
 import { InventoryModal } from './components/InventoryModal';
 import { SkillTreeModal } from './components/SkillTreeModal';
 import { OutcomeModal, PauseModal, BattleVictoryModal, VictoryRecapData } from './components/StatusModals';
@@ -14,10 +14,13 @@ import {
   executePlayerAction,
   getActiveEnemy,
   getEquippedSkillsList,
+  getLivingFieldEnemies,
   resolveQteInput,
   stepBattleTimeline,
+  switchBattleTarget,
 } from './game/battleEngine';
 import {
+  BATTLE_ADD_POSITIONS,
   BATTLE_ENEMY_POS,
   INTERNAL_HEIGHT,
   INTERNAL_WIDTH,
@@ -31,7 +34,7 @@ import {
   startEncounterTransition,
   stepEncounterTransition,
 } from './game/encounterTransition';
-import { MATERIAL_META, SHOP_CONSUMABLES } from './game/data';
+import { ARENA_TRIALS, MATERIAL_META, PET_CATALOG, SHOP_CONSUMABLES, TIER3_SPECIALIZATIONS } from './game/data';
 import {
   clearRunState,
   getSavedRunSummary,
@@ -45,16 +48,21 @@ import {
 } from './game/platformer';
 import {
   advanceToHeroClass,
+  advanceToTier3Class,
   bulkDisposeInventory,
+  buyPetFamiliar,
   computePlayerStats,
   createInitialPlayer,
   enchantEquipment,
+  equipPetFamiliar,
   generateEquipment,
+  grantXp,
   loadSkillPreset,
   reforgeEquipment,
   respecSkills,
   rollRarityForEnemy,
   saveSkillPreset,
+  spawnArenaBossWave,
   spawnEnemyWave,
   toggleEquipSkill,
   unlockSkillNode,
@@ -95,7 +103,7 @@ export default function App() {
   const [activeModal, setActiveModal] = useState<
     'none' | 'inventory' | 'skills' | 'town'
   >('none');
-  const [townInitialTab, setTownInitialTab] = useState<'shop' | 'blacksmith'>('shop');
+  const [townInitialTab, setTownInitialTab] = useState<TownTab>('shop');
   const [inspectEnemyOpen, setInspectEnemyOpen] = useState(false);
   const [battleItemsOpen, setBattleItemsOpen] = useState(false);
   const [victoryRecap, setVictoryRecap] = useState<VictoryRecapData | null>(null);
@@ -259,6 +267,13 @@ export default function App() {
     playerRef.current = {
       ...freshDefaults,
       ...saved.player,
+      materials: {
+        ...freshDefaults.materials,
+        ...(saved.player.materials ?? {}),
+      },
+      ownedPetIds: saved.player.ownedPetIds ?? [],
+      equippedPetId: saved.player.equippedPetId ?? null,
+      completedArenaIds: saved.player.completedArenaIds ?? [],
       skillPresets: saved.player.skillPresets ?? freshDefaults.skillPresets,
     };
     const stage = buildStage(saved.zone);
@@ -275,6 +290,8 @@ export default function App() {
     stageRef.current = stage;
     const pp = createPlatformerPlayer();
     pp.x = Math.max(24, Math.min(stage.width - 24, saved.playerX || 80));
+    pp.petX = pp.x - 20;
+    pp.petY = pp.y - 6;
     pPlayerRef.current = pp;
     lastHudSyncXRef.current = pp.x;
     battleRef.current = null;
@@ -302,7 +319,10 @@ export default function App() {
             : 'farm_chicken'
           : undefined;
       const wave = spawnEnemyWave(stage.zone, rarity, preferredId);
-      battleRef.current = createBattleState(stage.zone, rarity, ent.id, wave);
+      const initialCombo = playerRef.current.unlockedSkillIds.includes('all_t3_overdrive') ? 2 : 0;
+      battleRef.current = createBattleState(stage.zone, rarity, ent.id, wave, {
+        initialCombo,
+      });
       keysHeldRef.current.clear();
       setInspectEnemyOpen(false);
       setBattleItemsOpen(false);
@@ -310,6 +330,31 @@ export default function App() {
       syncUi();
     },
     [syncUi, updateMode]
+  );
+
+  const handleStartArenaTrial = useCallback(
+    (trialId: string) => {
+      const trial = ARENA_TRIALS.find((t) => t.id === trialId);
+      if (!trial || playerRef.current.highestZone < trial.minHighestZone) return;
+      audio.unlock();
+      audio.playEncounter('boss');
+      const wave = spawnArenaBossWave(trial);
+      const initialCombo = playerRef.current.unlockedSkillIds.includes('all_t3_overdrive') ? 2 : 0;
+      battleRef.current = createBattleState(
+        Math.max(stageRef.current.zone, trial.rewardZoneLevel),
+        'boss',
+        trial.id,
+        wave,
+        { arenaTrialId: trial.id, initialCombo }
+      );
+      openModal('none');
+      keysHeldRef.current.clear();
+      setInspectEnemyOpen(false);
+      setBattleItemsOpen(false);
+      updateMode('battle');
+      syncUi();
+    },
+    [openModal, syncUi, updateMode]
   );
 
   const handleInteract = useCallback(() => {
@@ -356,6 +401,27 @@ export default function App() {
       return;
     }
 
+    if (ent.kind === 'shrine' && !ent.used) {
+      ent.used = true;
+      const zone = stageRef.current.zone;
+      const stats = computePlayerStats(playerRef.current);
+      const hpGain = Math.round(stats.hp * 0.35);
+      const mpGain = Math.round(stats.mp * 0.35);
+      const goldGain = 35 * zone;
+      playerRef.current.currentHp = Math.min(stats.hp, playerRef.current.currentHp + hpGain);
+      playerRef.current.currentMp = Math.min(stats.mp, playerRef.current.currentMp + mpGain);
+      playerRef.current.ultimateCharge = 100;
+      playerRef.current.gold += goldGain;
+      audio.playHeal();
+      vfxRef.current.spawnBurst(ent.x, ent.y - 18, 20, '#38bdf8');
+      vfxRef.current.spawnRing(ent.x, ent.y - 18, 36, '#facc15');
+      vfxRef.current.spawnPopup(ent.x, ent.y - 30, `SHRINE BLESSING! +100% ULT +${goldGain}G`, '#38bdf8');
+      showToast(`Blessing Shrine activated: +${hpGain} HP, +${mpGain} MP, 100% ULT & +${goldGain}G!`);
+      persistCurrentRun();
+      syncUi();
+      return;
+    }
+
     if (ent.kind === 'portal') {
       const bossDefeated = stageRef.current.entities.some(
         (e) => e.kind === 'enemy' && e.enemyRarity === 'boss' && e.defeated
@@ -365,7 +431,7 @@ export default function App() {
         return;
       }
       const nextZone = stageRef.current.zone + 1;
-      if (nextZone <= 8) {
+      if (nextZone <= 10) {
         playerRef.current.highestZone = Math.max(
           playerRef.current.highestZone,
           nextZone
@@ -519,7 +585,14 @@ export default function App() {
         }
 
         if (battle.phase === 'player_turn') {
-          if (code === 'KeyQ') handleBattleAction({ kind: 'attack' });
+          if (code === 'Tab') {
+            e.preventDefault();
+            if (getLivingFieldEnemies(battle).length > 1) {
+              switchBattleTarget(battle);
+              audio.playMenuBlip();
+              syncUi();
+            }
+          } else if (code === 'KeyQ') handleBattleAction({ kind: 'attack' });
           else if (code === 'KeyG') handleBattleAction({ kind: 'guard' });
           else if (code === 'KeyU') handleBattleAction({ kind: 'ultimate' });
           else if (code === 'KeyF') setBattleItemsOpen((v) => !v);
@@ -562,6 +635,7 @@ export default function App() {
     handleQteTrigger,
     openModal,
     startNewRun,
+    syncUi,
     updateMode,
   ]);
 
@@ -610,6 +684,25 @@ export default function App() {
           Math.abs(pPlayerRef.current.x - lastHudSyncXRef.current) >= 18;
         if (stepRes.jumped) {
           audio.playJump();
+        }
+        if (stepRes.bounced) {
+          audio.playJump();
+          vfx.spawnBurst(pPlayerRef.current.x, pPlayerRef.current.y, 12, '#22d3ee');
+        }
+        if (stepRes.hazardDamagePct > 0) {
+          const stats = computePlayerStats(playerRef.current);
+          const hDmg = Math.max(4, Math.round((stats.hp * stepRes.hazardDamagePct) / 100));
+          playerRef.current.currentHp = Math.max(1, playerRef.current.currentHp - hDmg);
+          audio.playHit();
+          vfx.addTrauma(0.35);
+          vfx.spawnBurst(pPlayerRef.current.x, pPlayerRef.current.y - 8, 10, '#f43f5e');
+          vfx.spawnPopup(
+            pPlayerRef.current.x,
+            pPlayerRef.current.y - 26,
+            `-${hDmg} HAZARD!`,
+            '#f43f5e'
+          );
+          movedEnough = true;
         }
         if (stepRes.collectedGold > 0) {
           playerRef.current.gold += stepRes.collectedGold;
@@ -671,26 +764,40 @@ export default function App() {
         }
 
         if (battle.phase === 'victory' && battle.phaseTimer <= 0.05) {
-          // Mark world enemy defeated
-          const worldEnt = stageRef.current.entities.find(
-            (e) => e.id === battle.sourceEntityId
-          );
-          if (worldEnt) worldEnt.defeated = true;
-
           const rewards = battle.rewards;
-          const isFinalBoss =
-            stageRef.current.zone === 8 && battle.encounterRarity === 'boss';
+          const arenaTrial = battle.arenaTrialId
+            ? ARENA_TRIALS.find((t) => t.id === battle.arenaTrialId)
+            : undefined;
 
-          if (isFinalBoss) {
-            clearRunState();
-            setSavedSummary(null);
-            battleRef.current = null;
-            updateMode('victory');
-            syncUi();
-          } else {
+          if (arenaTrial) {
+            playerRef.current.gold += arenaTrial.bonusGold;
+            rewards.gold += arenaTrial.bonusGold;
+            const xpRes = grantXp(playerRef.current, arenaTrial.bonusXp);
+            Object.assign(playerRef.current, xpRes.player);
+            rewards.xp += arenaTrial.bonusXp;
+            rewards.levelsGained += xpRes.levelsGained;
+
+            const slots: EquipmentSlot[] = ['weapon', 'armor', 'helm', 'charm'];
+            const slot = slots[Math.floor(Math.random() * slots.length)];
+            const bonusGear = generateEquipment(
+              slot,
+              arenaTrial.guaranteedRarity,
+              arenaTrial.rewardZoneLevel
+            );
+            playerRef.current.inventory.push(bonusGear);
+            rewards.items.push(bonusGear);
+
+            if (!playerRef.current.completedArenaIds.includes(arenaTrial.id)) {
+              playerRef.current.completedArenaIds = [
+                ...playerRef.current.completedArenaIds,
+                arenaTrial.id,
+              ];
+            }
+
             const recap: VictoryRecapData = {
-              zone: battle.zone,
-              enemyName: worldEnt?.enemyName ?? battle.wave[0]?.name ?? 'Monsters',
+              zone: arenaTrial.rewardZoneLevel,
+              title: `${arenaTrial.name.toUpperCase()} CLEARED!`,
+              enemyName: arenaTrial.name,
               turnCount: battle.turnCount,
               xp: rewards.xp,
               gold: rewards.gold,
@@ -707,14 +814,69 @@ export default function App() {
             updateMode('explore');
             persistCurrentRun();
             syncUi();
+          } else {
+            const worldEnt = stageRef.current.entities.find(
+              (e) => e.id === battle.sourceEntityId
+            );
+            if (worldEnt) worldEnt.defeated = true;
+
+            const isFinalBoss =
+              stageRef.current.zone === 10 && battle.encounterRarity === 'boss';
+
+            if (isFinalBoss) {
+              clearRunState();
+              setSavedSummary(null);
+              battleRef.current = null;
+              updateMode('victory');
+              syncUi();
+            } else {
+              if (stageRef.current.zone === 8 && battle.encounterRarity === 'boss') {
+                playerRef.current.highestZone = Math.max(
+                  playerRef.current.highestZone,
+                  9
+                );
+                showToast('Ignis defeated! Zone 9 Sunken Starfall Ruins Portal unlocked!');
+              }
+              const recap: VictoryRecapData = {
+                zone: battle.zone,
+                enemyName: worldEnt?.enemyName ?? battle.wave[0]?.name ?? 'Monsters',
+                turnCount: battle.turnCount,
+                xp: rewards.xp,
+                gold: rewards.gold,
+                materials: rewards.materials,
+                items: rewards.items,
+                levelsGained: rewards.levelsGained,
+                maxComboCount: battle.maxComboCount,
+                maxComboDamage: battle.maxComboDamage,
+              };
+              victoryRecapRef.current = recap;
+              setVictoryRecap(recap);
+              battleRef.current = null;
+              setBattleItemsOpen(false);
+              updateMode('explore');
+              persistCurrentRun();
+              syncUi();
+            }
           }
         } else if (battle.phase === 'defeat') {
-          clearRunState();
-          setSavedSummary(null);
-          battleRef.current = null;
-          setBattleItemsOpen(false);
-          updateMode('gameover');
-          syncUi();
+          if (battle.arenaTrialId) {
+            const stats = computePlayerStats(playerRef.current);
+            playerRef.current.currentHp = Math.max(25, Math.round(stats.hp * 0.35));
+            playerRef.current.currentMp = Math.round(stats.mp * 0.5);
+            battleRef.current = null;
+            setBattleItemsOpen(false);
+            updateMode('explore');
+            showToast('Fell in Arena Trial! Restored safely at Wayside Camp.');
+            persistCurrentRun();
+            syncUi();
+          } else {
+            clearRunState();
+            setSavedSummary(null);
+            battleRef.current = null;
+            setBattleItemsOpen(false);
+            updateMode('gameover');
+            syncUi();
+          }
         } else if (
           prevPhase !== battle.phase ||
           battle.phase === 'qte_dodge' ||
@@ -772,7 +934,7 @@ export default function App() {
     return () => window.cancelAnimationFrame(rafId);
   }, [applyCombatEvents, persistCurrentRun, startBattleFromWorldEntity, syncUi, updateMode]);
 
-  // Click Enemy on Canvas to Open Full Enemy Stat Inspector
+  // Click Enemy on Canvas to Target or Inspect Enemy Stats
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     audio.unlock();
     if (modeRef.current !== 'battle' || !battleRef.current) return;
@@ -781,14 +943,41 @@ export default function App() {
     const rect = canvas.getBoundingClientRect();
     const cx = ((e.clientX - rect.left) / rect.width) * INTERNAL_WIDTH;
     const cy = ((e.clientY - rect.top) / rect.height) * INTERNAL_HEIGHT;
+    const battle = battleRef.current;
+    const currentTarget = getActiveEnemy(battle);
 
+    // Check adds first so flanking adds can be clicked cleanly
+    for (let i = 0; i < battle.adds.length; i++) {
+      const add = battle.adds[i];
+      if (!add || add.currentHp <= 0) continue;
+      const pos = BATTLE_ADD_POSITIONS[i] ?? BATTLE_ADD_POSITIONS[0];
+      if (Math.abs(cx - pos.x) < 42 && cy > pos.y - 100 && cy < pos.y + 15) {
+        audio.playMenuBlip();
+        if (currentTarget?.uid !== add.uid) {
+          switchBattleTarget(battle, add.uid);
+          syncUi();
+        } else {
+          setInspectEnemyOpen((prev) => !prev);
+        }
+        return;
+      }
+    }
+
+    const primary = battle.wave[battle.waveIndex];
     if (
-      Math.abs(cx - BATTLE_ENEMY_POS.x) < 62 &&
+      primary &&
+      primary.currentHp > 0 &&
+      Math.abs(cx - BATTLE_ENEMY_POS.x) < 55 &&
       cy > BATTLE_ENEMY_POS.y - 125 &&
       cy < BATTLE_ENEMY_POS.y + 15
     ) {
       audio.playMenuBlip();
-      setInspectEnemyOpen((prev) => !prev);
+      if (currentTarget?.uid !== primary.uid) {
+        switchBattleTarget(battle, primary.uid);
+        syncUi();
+      } else {
+        setInspectEnemyOpen((prev) => !prev);
+      }
     }
   };
 
@@ -840,6 +1029,10 @@ export default function App() {
           onPause={() => updateMode('paused')}
           onOpenInventory={() => openModal('inventory')}
           onOpenSkillTree={() => openModal('skills')}
+          onOpenArena={() => {
+            setTownInitialTab('arena');
+            openModal('town');
+          }}
           onInteract={handleInteract}
           onSelectZone={(z) => {
             stageRef.current = buildStage(z);
@@ -869,6 +1062,11 @@ export default function App() {
           }}
           onToggleInspectEnemy={(open) => setInspectEnemyOpen(open)}
           onToggleShowItems={() => setBattleItemsOpen((v) => !v)}
+          onSelectTarget={(uid) => {
+            switchBattleTarget(battle, uid);
+            audio.playMenuBlip();
+            syncUi();
+          }}
           onAction={handleBattleAction}
           onQteTrigger={handleQteTrigger}
         />
@@ -953,6 +1151,14 @@ export default function App() {
             persistCurrentRun();
             syncUi();
           }}
+          onAdvanceTier3={(branch) => {
+            playerRef.current = advanceToTier3Class(playerRef.current, branch);
+            const specName = TIER3_SPECIALIZATIONS[branch].name;
+            audio.playVictory();
+            showToast(`Ascended to Tier 3: ${specName}!`);
+            persistCurrentRun();
+            syncUi();
+          }}
           onRespec={() => {
             const res = respecSkills(playerRef.current);
             if (!res.success) {
@@ -982,7 +1188,7 @@ export default function App() {
         />
       )}
 
-      {/* Fireplace Shop & Blacksmith Modal */}
+      {/* Fireplace Shop, Blacksmith, Pet Familiars & Boss Rush Arena Modal */}
       {activeModal === 'town' && mode === 'explore' && (
         <FireplaceTownModal
           player={player}
@@ -1065,6 +1271,24 @@ export default function App() {
             syncUi();
             return { ok: true, msg: `Reforged ${res.item.name} affixes!` };
           }}
+          onBuyPet={(petId) => {
+            const res = buyPetFamiliar(playerRef.current, petId);
+            if (!res.success) return { ok: false, msg: res.reason ?? 'Cannot adopt pet.' };
+            playerRef.current = res.player;
+            const pet = PET_CATALOG.find((p) => p.id === petId);
+            audio.playCoin();
+            showToast(`Adopted & summoned ${pet?.name ?? 'Familiar'}!`);
+            persistCurrentRun();
+            syncUi();
+            return { ok: true, msg: `Adopted ${pet?.name ?? 'Familiar'}! Equipped and ready!` };
+          }}
+          onEquipPet={(petId) => {
+            playerRef.current = equipPetFamiliar(playerRef.current, petId);
+            audio.playMenuBlip();
+            persistCurrentRun();
+            syncUi();
+          }}
+          onStartArenaTrial={handleStartArenaTrial}
         />
       )}
 

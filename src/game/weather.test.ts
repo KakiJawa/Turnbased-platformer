@@ -17,9 +17,9 @@ import {
 } from './battleEngine';
 import { createInitialPlayer, spawnEnemyFromTemplate } from './rpgLogic';
 
-test('Every zone 1-8 has a distinct weather profile and valid daylight cycle state', () => {
+test('Every zone 1-10 has a distinct weather profile and valid daylight cycle state', () => {
   const seenKinds = new Set<string>();
-  for (let z = 1; z <= 8; z++) {
+  for (let z = 1; z <= 10; z++) {
     const profile = getZoneWeatherProfile(z);
     assert.equal(profile.zone, z);
     assert.ok(profile.particleCount > 0);
@@ -34,7 +34,7 @@ test('Every zone 1-8 has a distinct weather profile and valid daylight cycle sta
     assert.ok(cycle.overlayAlpha >= 0 && cycle.overlayAlpha <= 0.4);
     assert.ok(cycle.starAlpha >= 0 && cycle.starAlpha <= 1);
   }
-  assert.equal(seenKinds.size, 8);
+  assert.equal(seenKinds.size, 10);
 });
 
 test('WeatherSystem steps particles cleanly, wraps screen bounds, and resets on zone change', () => {

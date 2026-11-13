@@ -5,6 +5,7 @@ import { EquipmentItem, MaterialId, PlayerState } from '../game/types';
 
 export interface VictoryRecapData {
   zone: number;
+  title?: string;
   enemyName: string;
   turnCount: number;
   xp: number;
@@ -35,7 +36,9 @@ export function BattleVictoryModal({ recap, onContinue }: BattleVictoryModalProp
         <div className="flex items-center justify-between border-b-2 border-[#4b3f6b] pb-2 mb-3">
           <div className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-[#f7c948]" />
-            <h2 className="font-pixel text-base text-[#f7c948]">VICTORY!</h2>
+            <h2 className="font-pixel text-base text-[#f7c948]">
+              {recap.title ?? 'VICTORY!'}
+            </h2>
           </div>
           {recap.levelsGained > 0 && (
             <span className="font-pixel text-[11px] px-2 py-0.5 bg-[#4ade80] text-[#0e0b16] border border-[#0e0b16]">
@@ -191,11 +194,11 @@ export function OutcomeModal({ kind, player, zone, onRestart }: OutcomeModalProp
             isVictory ? 'text-[#f7c948]' : 'text-[#ef4444]'
           }`}
         >
-          {isVictory ? 'DRAGON CONQUERED!' : 'DEFEATED IN BATTLE'}
+          {isVictory ? 'VOID SPIRE CONQUERED!' : 'DEFEATED IN BATTLE'}
         </h2>
         <p className="text-xs text-[#cbd5e1] mb-4">
           {isVictory
-            ? 'You rose from a humble Villager to vanquish Ignis at Obsidian Peaks!'
+            ? 'You rose from a humble Villager, vanquished Ignis, and shattered Architect Malakor atop The Void Spire!'
             : 'Your journey ended in the field, but your legend awaits another try.'}
         </p>
 
@@ -208,7 +211,7 @@ export function OutcomeModal({ kind, player, zone, onRestart }: OutcomeModalProp
           </div>
           <div className="bg-[#0e0b16] border border-[#4b3f6b] p-2">
             <div className="text-[#94a3b8]">Zone</div>
-            <div className="font-bold text-[#f7c948] mt-0.5">{zone}/8</div>
+            <div className="font-bold text-[#f7c948] mt-0.5">{zone}/10</div>
           </div>
           <div className="bg-[#0e0b16] border border-[#4b3f6b] p-2">
             <div className="text-[#94a3b8]">Slain</div>

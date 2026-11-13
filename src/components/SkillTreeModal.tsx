@@ -1,15 +1,17 @@
 import { Crown, GitBranch, Lock, RotateCcw, Save, Sparkles, X } from 'lucide-react';
 import { useState } from 'react';
-import { BRANCH_META, SKILL_TREE } from '../game/data';
+import { BRANCH_META, SKILL_TREE, TIER3_SPECIALIZATIONS } from '../game/data';
 import {
   MAX_EQUIPPED_SKILLS,
   MAX_TIER1_LEVEL,
   canAdvanceClass,
+  canAdvanceToTier3,
   canUnlockSkill,
   getRespecCost,
   getSkillById,
+  getTotalCharacterLevel,
 } from '../game/rpgLogic';
-import { PlayerState, SkillBranch } from '../game/types';
+import { PlayerState, SkillBranch, Tier3SpecializationId } from '../game/types';
 
 interface SkillTreeModalProps {
   player: PlayerState;
@@ -17,6 +19,7 @@ interface SkillTreeModalProps {
   onUnlockSkill: (skillId: string) => void;
   onToggleEquipSkill: (skillId: string) => void;
   onAdvanceClass: () => void;
+  onAdvanceTier3: (branch: Tier3SpecializationId) => void;
   onRespec: () => { ok: boolean; msg: string };
   onSavePreset: (slotIndex: number) => void;
   onLoadPreset: (slotIndex: number) => void;
@@ -37,12 +40,15 @@ export function SkillTreeModal({
   onUnlockSkill,
   onToggleEquipSkill,
   onAdvanceClass,
+  onAdvanceTier3,
   onRespec,
   onSavePreset,
   onLoadPreset,
 }: SkillTreeModalProps) {
   const [feedback, setFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
   const readyToAdvance = canAdvanceClass(player);
+  const readyToTier3 = canAdvanceToTier3(player);
+  const totalLv = getTotalCharacterLevel(player);
   const respecCost = getRespecCost(player);
   const presets = player.skillPresets ?? [
     { name: 'Preset 1', skillIds: ['phy_t1_slash'], ultimateId: '' },
@@ -58,10 +64,10 @@ export function SkillTreeModal({
             <GitBranch className="w-5 h-5 text-[#38bdf8]" />
             <div>
               <h2 className="font-pixel text-base text-[#38bdf8]">
-                6-Branch Skill Tree · {player.className} (Tier {player.classTier})
+                6-Branch Skill Tree · {player.className} (Tier {player.classTier} · Total Lv.{totalLv})
               </h2>
               <p className="text-xs text-[#cbd5e1]">
-                Max 6 Active Skills (1–5t CD) &amp; 1 Ultimate equipped · Advance at Villager Lv.{MAX_TIER1_LEVEL}
+                Max 6 Active Skills &amp; 1 Ultimate · Tier 2 at Villager Lv.{MAX_TIER1_LEVEL} · Tier 3 at Total Lv.30+
               </p>
             </div>
           </div>
@@ -179,6 +185,54 @@ export function SkillTreeModal({
           </div>
         </div>
 
+        {readyToTier3 && (
+          <div
+            data-testid="tier3-specialization-picker"
+            className="px-5 py-3 bg-[#140e24] border-b-2 border-[#c084fc] flex flex-col gap-2"
+          >
+            <div className="flex items-center gap-2 font-pixel text-xs text-[#facc15]">
+              <Crown className="w-4 h-4" />
+              <span>TIER 3 CLASS SPECIALIZATION READY! Choose Your Ascended Path (+3 Skill Points):</span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+              {(Object.keys(TIER3_SPECIALIZATIONS) as Tier3SpecializationId[]).map((branchId) => {
+                const spec = TIER3_SPECIALIZATIONS[branchId];
+                return (
+                  <div
+                    key={spec.id}
+                    className="p-2.5 bg-[#1b162b] border-2 flex flex-col justify-between gap-2"
+                    style={{ borderColor: spec.accent }}
+                  >
+                    <div>
+                      <div className="font-pixel text-xs" style={{ color: spec.accent }}>
+                        {spec.name}
+                      </div>
+                      <div className="text-[10px] text-[#e6d8bd] font-semibold">
+                        {spec.title} · Trait: {spec.traitName}
+                      </div>
+                      <div className="text-[10px] text-[#94a3b8] mt-1 leading-snug">
+                        {spec.traitDesc}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      data-testid={`choose-tier3-${spec.id}`}
+                      onClick={() => {
+                        onAdvanceTier3(spec.id);
+                        setFeedback({ ok: true, msg: `Ascended to ${spec.name}!` });
+                      }}
+                      className="w-full font-pixel text-[10px] py-1.5 text-[#0e0b16] border border-[#0e0b16] cursor-pointer"
+                      style={{ backgroundColor: spec.accent }}
+                    >
+                      Ascend to {spec.name}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {feedback && (
           <div
             className={`px-5 py-1.5 text-xs font-pixel border-b border-[#4b3f6b] ${
@@ -250,8 +304,14 @@ export function SkillTreeModal({
                               ? `Active · ${node.mpCost ?? 0} MP · ${node.cooldown ?? 1}t CD`
                               : node.kind === 'ultimate'
                               ? 'Ultimate (100% Charge)'
+                              : node.passiveTag?.startsWith('combo_')
+                              ? 'Combo Synergy'
                               : 'Passive / Stat'}
-                            {node.tierRequired === 2 ? ' · Hero Tier 2' : ''}
+                            {node.tierRequired === 2
+                              ? ' · Tier 2'
+                              : node.tierRequired === 3
+                              ? ' · Tier 3'
+                              : ''}
                           </div>
                         </div>
 

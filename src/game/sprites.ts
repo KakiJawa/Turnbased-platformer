@@ -1,5 +1,5 @@
 import { PALETTE } from './palette';
-import { ActorAnimState, SpriteId } from './types';
+import { ActorAnimState, HazardKind, SpriteId } from './types';
 
 // Helper to draw crisp pixel rectangles relative to actor anchor (center-bottom x, y)
 function pxRect(
@@ -56,6 +56,15 @@ function drawSpriteShape(
     case 'hero':
       drawHeroPixels(ctx, animState, time, walkCycle);
       break;
+    case 'hero_vanguard':
+      drawTier3VanguardPixels(ctx, animState, time, walkCycle);
+      break;
+    case 'hero_spellblade':
+      drawTier3SpellbladePixels(ctx, animState, time, walkCycle);
+      break;
+    case 'hero_shadowstrider':
+      drawTier3ShadowstriderPixels(ctx, animState, time, walkCycle);
+      break;
     case 'chicken':
       drawChickenPixels(ctx, animState, time);
       break;
@@ -89,6 +98,25 @@ function drawSpriteShape(
     case 'magma':
     case 'dragon_boss':
       drawDragonFamilyPixels(ctx, sprite, animState, time);
+      break;
+    case 'star_squid':
+    case 'star_sentinel':
+    case 'leviathan':
+    case 'starfall_boss':
+      drawStarfallFamilyPixels(ctx, sprite, animState, time);
+      break;
+    case 'void_stalker':
+    case 'void_harbinger':
+    case 'void_warden':
+    case 'void_boss':
+      drawVoidFamilyPixels(ctx, sprite, animState, time);
+      break;
+    case 'pet_chick':
+    case 'pet_pup':
+    case 'pet_wisp':
+    case 'pet_turtle':
+    case 'pet_drake':
+      drawPetPixels(ctx, sprite, animState, time);
       break;
   }
 }
@@ -566,3 +594,284 @@ export function drawPortalSprite(
   pxRect(ctx, x - 8, y - 30, 16, 30, PALETTE.violetArcane);
   pxRect(ctx, x - 5 + pulse * 0.3, y - 26, 10, 24, PALETTE.cyanMagic);
 }
+
+// ================= TIER 3 CLASS SPECIALIZATION SPRITES =================
+
+function drawTier3VanguardPixels(
+  ctx: CanvasRenderingContext2D,
+  anim: ActorAnimState,
+  _time: number,
+  walkCycle: number
+) {
+  const step = walkCycle > 0 ? Math.sin(walkCycle * 0.35) * 2 : 0;
+  pxRect(ctx, -11, -19, 6, 14, '#7f1d1d'); // Heavy Crimson Mantle
+  pxRect(ctx, -5, -7 + step, 4, 7, '#cbd5e1');
+  pxRect(ctx, 1, -7 - step, 4, 7, '#94a3b8');
+  pxRect(ctx, -8, -19, 16, 13, '#eab308'); // Golden Aegis Plate
+  pxRect(ctx, -6, -18, 12, 9, '#fef08a');
+  pxRect(ctx, -6, -28, 12, 9, PALETTE.skinLight);
+  pxRect(ctx, -8, -32, 16, 6, '#facc15'); // Crowned Greathelm
+  pxRect(ctx, -2, -36, 4, 4, '#ef4444');
+  pxRect(ctx, 2, -25, 3, 3, '#38bdf8');
+  // Tower Shield + Halberd
+  pxRect(ctx, anim === 'attack' ? 8 : 6, -20, 6, 15, '#1e293b');
+  pxRect(ctx, anim === 'attack' ? 9 : 7, -18, 4, 11, '#facc15');
+  pxRect(ctx, anim === 'attack' ? 12 : -8, -28, 3, 20, '#e2e8f0');
+}
+
+function drawTier3SpellbladePixels(
+  ctx: CanvasRenderingContext2D,
+  anim: ActorAnimState,
+  time: number,
+  walkCycle: number
+) {
+  const step = walkCycle > 0 ? Math.sin(walkCycle * 0.35) * 2 : 0;
+  const glow = Math.sin(time * 8) > 0 ? '#7dd3fc' : '#38bdf8';
+  pxRect(ctx, -11, -18, 6, 13, '#1e3a8a'); // Astral Cape
+  pxRect(ctx, -5, -7 + step, 4, 7, '#1e293b');
+  pxRect(ctx, 1, -7 - step, 4, 7, '#334155');
+  pxRect(ctx, -7, -18, 14, 12, '#0284c7'); // Starlight Tunic
+  pxRect(ctx, -5, -17, 10, 8, '#38bdf8');
+  pxRect(ctx, -7, -11, 14, 2, '#facc15');
+  pxRect(ctx, -6, -27, 12, 9, PALETTE.skinLight);
+  pxRect(ctx, -7, -31, 14, 5, '#1e3a8a'); // Hood/Circlet
+  pxRect(ctx, -2, -33, 4, 3, glow);
+  pxRect(ctx, 2, -24, 2, 3, glow);
+  // Floating Runeblade
+  if (anim === 'attack') {
+    pxRect(ctx, 6, -16, 19, 3, '#e0f2fe');
+    pxRect(ctx, 8, -15, 16, 1, glow);
+  } else {
+    pxRect(ctx, 7, -28, 3, 19, '#e0f2fe');
+    pxRect(ctx, 8, -26, 1, 15, glow);
+  }
+}
+
+function drawTier3ShadowstriderPixels(
+  ctx: CanvasRenderingContext2D,
+  anim: ActorAnimState,
+  _time: number,
+  walkCycle: number
+) {
+  const step = walkCycle > 0 ? Math.sin(walkCycle * 0.45) * 2 : 0;
+  pxRect(ctx, -11, -17, 7, 11, '#581c87'); // Phantom Scarf
+  pxRect(ctx, -5, -7 + step, 4, 7, '#0f172a');
+  pxRect(ctx, 1, -7 - step, 4, 7, '#1e1b4b');
+  pxRect(ctx, -7, -17, 14, 11, '#1e1b4b'); // Shadow Cloak
+  pxRect(ctx, -6, -12, 12, 2, '#c084fc');
+  pxRect(ctx, -6, -26, 12, 9, PALETTE.skinShadow);
+  pxRect(ctx, -7, -30, 14, 5, '#4c1d95'); // Assassin Hood
+  pxRect(ctx, 2, -23, 3, 2, '#f43f5e'); // Glowing Eye
+  // Twin Venom Daggers
+  if (anim === 'attack') {
+    pxRect(ctx, 6, -15, 16, 2, '#e879f9');
+    pxRect(ctx, 7, -11, 14, 2, '#f43f5e');
+  } else {
+    pxRect(ctx, 7, -21, 3, 13, '#e879f9');
+    pxRect(ctx, -9, -19, 3, 11, '#c084fc');
+  }
+}
+
+// ================= ZONE 9-10 ENDGAME ENEMY SPRITES =================
+
+function drawStarfallFamilyPixels(
+  ctx: CanvasRenderingContext2D,
+  sprite: 'star_squid' | 'star_sentinel' | 'leviathan' | 'starfall_boss',
+  anim: ActorAnimState,
+  time: number
+) {
+  const pulse = Math.sin(time * 6) * 2;
+  const primary =
+    sprite === 'starfall_boss'
+      ? '#06b6d4'
+      : sprite === 'leviathan'
+      ? '#0e7490'
+      : sprite === 'star_sentinel'
+      ? '#38bdf8'
+      : '#22d3ee';
+  const trim = sprite === 'starfall_boss' ? '#facc15' : '#bae6fd';
+
+  if (sprite === 'star_squid') {
+    pxRect(ctx, -7, -22 + pulse, 14, 13, primary);
+    pxRect(ctx, -5, -24 + pulse, 10, 4, trim);
+    pxRect(ctx, -8, -9, 3, 9, '#0891b2');
+    pxRect(ctx, -2, -9, 3, 9, primary);
+    pxRect(ctx, 4, -9, 3, 9, '#0891b2');
+    pxRect(ctx, -4, -17 + pulse, 2, 3, PALETTE.gold);
+    pxRect(ctx, 2, -17 + pulse, 2, 3, PALETTE.gold);
+    return;
+  }
+
+  if (sprite === 'starfall_boss') {
+    // Astral Empress Wings / Halo
+    pxRect(ctx, -18, -32 + pulse * 0.5, 10, 18, '#0284c7');
+    pxRect(ctx, 8, -32 + pulse * 0.5, 10, 18, '#0284c7');
+    pxRect(ctx, -10, -24, 20, 18, primary);
+    pxRect(ctx, -6, -34, 12, 10, '#e0f2fe');
+    pxRect(ctx, -9, -38, 18, 4, trim); // Star Crown
+    pxRect(ctx, -4, -30, 3, 3, anim === 'staggered' ? '#ffffff' : '#f43f5e');
+    pxRect(ctx, 2, -30, 3, 3, anim === 'staggered' ? '#ffffff' : '#f43f5e');
+    pxRect(ctx, 11, -30, 3, 28, trim); // Astral Trident
+    return;
+  }
+
+  // Sentinel / Leviathan
+  pxRect(ctx, -7, -8, 5, 8, '#164e63');
+  pxRect(ctx, 2, -8, 5, 8, '#164e63');
+  pxRect(ctx, -11, -24, 22, 17, primary);
+  pxRect(ctx, -8, -20, 16, 10, trim);
+  pxRect(ctx, -6, -32, 12, 9, primary);
+  pxRect(ctx, -3, -29, 2, 3, '#facc15');
+  pxRect(ctx, 2, -29, 2, 3, '#facc15');
+  pxRect(ctx, anim === 'attack' ? 10 : 8, -24, 5, 16, trim);
+}
+
+function drawVoidFamilyPixels(
+  ctx: CanvasRenderingContext2D,
+  sprite: 'void_stalker' | 'void_harbinger' | 'void_warden' | 'void_boss',
+  anim: ActorAnimState,
+  time: number
+) {
+  const floatY = Math.sin(time * 5) * 2;
+  const darkBody = sprite === 'void_boss' ? '#2e1065' : '#1e1b4b';
+  const neon = sprite === 'void_boss' ? '#f43f5e' : '#c084fc';
+
+  if (sprite === 'void_boss') {
+    // Architect Malakor: floating obsidian mantle + twin void sigils
+    pxRect(ctx, -19, -34 + floatY, 9, 22, '#581c87');
+    pxRect(ctx, 10, -34 + floatY, 9, 22, '#581c87');
+    pxRect(ctx, -12, -26 + floatY, 24, 20, darkBody);
+    pxRect(ctx, -8, -23 + floatY, 16, 12, '#4c1d95');
+    pxRect(ctx, -7, -36 + floatY, 14, 10, '#0f172a');
+    pxRect(ctx, -10, -40 + floatY, 4, 6, neon); // Horns
+    pxRect(ctx, 6, -40 + floatY, 4, 6, neon);
+    pxRect(ctx, -4, -33 + floatY, 3, 2, anim === 'staggered' ? '#facc15' : neon);
+    pxRect(ctx, 2, -33 + floatY, 3, 2, anim === 'staggered' ? '#facc15' : neon);
+    pxRect(ctx, -3, -18 + floatY, 6, 6, neon); // Core
+    return;
+  }
+
+  pxRect(ctx, -6, -8, 5, 8, '#0f172a');
+  pxRect(ctx, 1, -8, 5, 8, '#0f172a');
+  pxRect(ctx, -10, -23 + (sprite === 'void_harbinger' ? floatY : 0), 20, 16, darkBody);
+  pxRect(ctx, -7, -31 + (sprite === 'void_harbinger' ? floatY : 0), 14, 9, '#312e81');
+  pxRect(ctx, -4, -28 + (sprite === 'void_harbinger' ? floatY : 0), 2, 2, neon);
+  pxRect(ctx, 2, -28 + (sprite === 'void_harbinger' ? floatY : 0), 2, 2, neon);
+  pxRect(ctx, anim === 'attack' ? 9 : 7, -23, 4, 16, neon);
+}
+
+// ================= PET FAMILIAR PIXEL SPRITES =================
+
+function drawPetPixels(
+  ctx: CanvasRenderingContext2D,
+  sprite: 'pet_chick' | 'pet_pup' | 'pet_wisp' | 'pet_turtle' | 'pet_drake',
+  anim: ActorAnimState,
+  time: number
+) {
+  const hop = Math.abs(Math.sin(time * 7)) * -2;
+  if (sprite === 'pet_chick') {
+    pxRect(ctx, -3, -2, 2, 2, PALETTE.fireOrange);
+    pxRect(ctx, 1, -2, 2, 2, PALETTE.fireOrange);
+    pxRect(ctx, -5, -10 + hop, 10, 8, '#fde047');
+    pxRect(ctx, 5, -7 + hop, 3, 2, PALETTE.fireOrange);
+    pxRect(ctx, 2, -8 + hop, 2, 2, PALETTE.ink);
+    return;
+  }
+  if (sprite === 'pet_pup') {
+    pxRect(ctx, -5, -3, 2, 3, '#64748b');
+    pxRect(ctx, 3, -3, 2, 3, '#64748b');
+    pxRect(ctx, -7, -10 + hop, 14, 7, '#cbd5e1');
+    pxRect(ctx, 3, -14 + hop, 7, 6, '#e2e8f0');
+    pxRect(ctx, 4, -16 + hop, 2, 2, '#475569');
+    pxRect(ctx, 7, -12 + hop, 2, 2, PALETTE.ink);
+    return;
+  }
+  if (sprite === 'pet_wisp') {
+    const floatY = Math.sin(time * 6) * 3 - 5;
+    pxRect(ctx, -5, -11 + floatY, 10, 10, '#f97316');
+    pxRect(ctx, -3, -14 + floatY, 6, 4, '#facc15');
+    pxRect(ctx, -3, -9 + floatY, 6, 6, '#fef08a');
+    pxRect(ctx, -2, -7 + floatY, 2, 2, PALETTE.ink);
+    pxRect(ctx, 1, -7 + floatY, 2, 2, PALETTE.ink);
+    return;
+  }
+  if (sprite === 'pet_turtle') {
+    pxRect(ctx, -6, -3, 3, 3, '#4ade80');
+    pxRect(ctx, 3, -3, 3, 3, '#4ade80');
+    pxRect(ctx, -8, -11 + hop * 0.4, 15, 8, '#15803d');
+    pxRect(ctx, -6, -13 + hop * 0.4, 11, 4, '#4ade80');
+    pxRect(ctx, 6, -9 + hop * 0.4, 5, 5, '#86efac');
+    pxRect(ctx, 9, -8 + hop * 0.4, 2, 2, PALETTE.ink);
+    return;
+  }
+  // pet_drake
+  const flap = Math.sin(time * 9) * 2;
+  const floatY = Math.sin(time * 5) * 2 - 4;
+  pxRect(ctx, -9, -15 + flap + floatY, 6, 7, '#0284c7');
+  pxRect(ctx, -6, -11 + floatY, 12, 8, '#38bdf8');
+  pxRect(ctx, 3, -16 + floatY, 7, 6, '#7dd3fc');
+  pxRect(ctx, 3, -18 + floatY, 2, 2, '#facc15');
+  pxRect(ctx, 7, -14 + floatY, 2, 2, anim === 'attack' ? '#f43f5e' : PALETTE.ink);
+}
+
+// ================= INTERACTIVE STAGE PROPS & HAZARDS =================
+
+export function drawBouncePadSprite(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  time: number
+) {
+  const pulse = Math.sin(time * 8) > 0 ? 1 : 0;
+  pxRect(ctx, x - 11, y - 4, 22, 4, PALETTE.stoneDark);
+  pxRect(ctx, x - 9, y - 8 - pulse, 18, 4, '#22d3ee');
+  pxRect(ctx, x - 6, y - 10 - pulse, 12, 2, '#fef08a');
+}
+
+export function drawHazardSprite(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  hazardKind: HazardKind,
+  time: number
+) {
+  const half = Math.round(w / 2);
+  const pulse = Math.sin(time * 9) > 0;
+  if (hazardKind === 'lava') {
+    pxRect(ctx, x - half, y - 4, w, 5, '#dc2626');
+    pxRect(ctx, x - half + 2, y - 6 + (pulse ? -1 : 0), w - 4, 3, '#fb923c');
+    pxRect(ctx, x - 4, y - 8 + (pulse ? 0 : 1), 6, 2, '#fef08a');
+    return;
+  }
+  if (hazardKind === 'void_rift') {
+    pxRect(ctx, x - half, y - 4, w, 5, '#4c1d95');
+    pxRect(ctx, x - half + 3, y - 7 + (pulse ? -1 : 0), w - 6, 3, '#e879f9');
+    return;
+  }
+  const color = hazardKind === 'thorns' ? '#be123c' : '#cbd5e1';
+  for (let sx = x - half; sx < x + half; sx += 6) {
+    pxRect(ctx, sx + 1, y - 7, 4, 7, color);
+    pxRect(ctx, sx + 2, y - 9, 2, 3, hazardKind === 'thorns' ? '#fb7185' : '#ffffff');
+  }
+}
+
+export function drawShrineSprite(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  used: boolean,
+  time: number
+) {
+  pxRect(ctx, x - 9, y - 5, 18, 5, PALETTE.stoneDark);
+  pxRect(ctx, x - 5, y - 22, 10, 17, PALETTE.stoneLight);
+  pxRect(ctx, x - 8, y - 25, 16, 4, PALETTE.slateLight);
+  if (!used) {
+    const bob = Math.sin(time * 6) * 2;
+    pxRect(ctx, x - 3, y - 33 + bob, 6, 6, '#38bdf8');
+    pxRect(ctx, x - 1, y - 31 + bob, 2, 2, '#ffffff');
+  } else {
+    pxRect(ctx, x - 3, y - 30, 6, 4, '#475569');
+  }
+}
+

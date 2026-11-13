@@ -1,4 +1,4 @@
-import { MATERIAL_META, SKILL_TREE } from './data';
+import { ENEMY_TEMPLATES, MATERIAL_META, PET_CATALOG, SKILL_TREE } from './data';
 import {
   calculateDamage,
   computePlayerStats,
@@ -6,6 +6,7 @@ import {
   getSkillById,
   grantXp,
   rollRarityForEnemy,
+  spawnEnemyFromTemplate,
 } from './rpgLogic';
 import {
   ActiveBuff,
@@ -57,8 +58,15 @@ export interface BattleState {
   zone: number;
   encounterRarity: EnemyRarity;
   sourceEntityId: string;
+  arenaTrialId?: string;
   wave: CombatEnemy[];
   waveIndex: number;
+  adds: CombatEnemy[];
+  targetEnemyUid: string | null;
+  pendingEnemyQueue: string[];
+  pendingActorUid: string | null;
+  processedDefeatUids: string[];
+  petTurnCounter: number;
   turnCount: number;
   phase: BattlePhase;
   phaseTimer: number;
@@ -126,7 +134,7 @@ export function canUseComboFinisher(battle: BattleState): boolean {
 
 export function canUseStaggerExecute(battle: BattleState): boolean {
   const enemy = getActiveEnemy(battle);
-  return battle.comboCount >= 3 && Boolean(enemy) && enemy.staggeredTurns === 0;
+  return battle.comboCount >= 3 && Boolean(enemy) && enemy.currentHp > 0 && enemy.staggeredTurns === 0;
 }
 
 let logSeq = 1;
@@ -135,15 +143,69 @@ export function createBattleState(
   zone: number,
   encounterRarity: EnemyRarity,
   sourceEntityId: string,
-  wave: CombatEnemy[]
+  wave: CombatEnemy[],
+  options?: string | { arenaTrialId?: string; initialCombo?: number }
 ): BattleState {
+  const opts =
+    typeof options === 'string'
+      ? { arenaTrialId: options, initialCombo: 0 }
+      : options ?? {};
   const first = wave[0];
+  const adds: CombatEnemy[] = [];
+  const logs: BattleLogEntry[] = [
+    {
+      id: logSeq++,
+      turn: 1,
+      text: `Wave 1/${wave.length}: ${first.name} steps forward!`,
+      tone: 'info',
+    },
+    {
+      id: logSeq++,
+      turn: 1,
+      text: `Weather: ${getWeatherCombatEffect(zone).name} (${getWeatherCombatEffect(zone).shortEffect})`,
+      tone: 'info',
+    },
+  ];
+
+  // Dual-enemy encounters spawn partner add on the field alongside primary enemy
+  if (!opts.arenaTrialId && first) {
+    const tpl = ENEMY_TEMPLATES.find((t) => t.id === first.templateId);
+    if (tpl?.dualPartnerId) {
+      const partner = spawnEnemyFromTemplate(tpl.dualPartnerId);
+      partner.isAdd = true;
+      adds.push(partner);
+      logs.unshift({
+        id: logSeq++,
+        turn: 1,
+        text: `Dual Encounter: ${partner.name} flanks alongside ${first.name}!`,
+        tone: 'enemy',
+      });
+    }
+  }
+
+  const startCombo = opts.initialCombo ?? 0;
+  if (startCombo > 0) {
+    logs.unshift({
+      id: logSeq++,
+      turn: 1,
+      text: `Overdrive Convergence: Started battle with ${startCombo}x Combo!`,
+      tone: 'stagger',
+    });
+  }
+
   return {
     zone,
     encounterRarity,
     sourceEntityId,
+    arenaTrialId: opts.arenaTrialId,
     wave,
     waveIndex: 0,
+    adds,
+    targetEnemyUid: first?.uid ?? null,
+    pendingEnemyQueue: [],
+    pendingActorUid: null,
+    processedDefeatUids: [],
+    petTurnCounter: 0,
     turnCount: 1,
     phase: 'player_turn',
     phaseTimer: 0,
@@ -167,20 +229,7 @@ export function createBattleState(
       pendingEnemyStagger: 0,
       pendingMoveName: '',
     },
-    logs: [
-      {
-        id: logSeq++,
-        turn: 1,
-        text: `Wave 1/${wave.length}: ${first.name} steps forward!`,
-        tone: 'info',
-      },
-      {
-        id: logSeq++,
-        turn: 1,
-        text: `Weather: ${getWeatherCombatEffect(zone).name} (${getWeatherCombatEffect(zone).shortEffect})`,
-        tone: 'info',
-      },
-    ],
+    logs,
     rewards: {
       xp: 0,
       gold: 0,
@@ -189,11 +238,11 @@ export function createBattleState(
       levelsGained: 0,
     },
     pendingEnemyAction: null,
-    comboCount: 0,
+    comboCount: startCombo,
     comboDamage: 0,
-    maxComboCount: 0,
+    maxComboCount: startCombo,
     maxComboDamage: 0,
-    comboFlashSeq: 0,
+    comboFlashSeq: startCombo > 0 ? 1 : 0,
   };
 }
 
@@ -208,8 +257,62 @@ export function addBattleLog(
   ].slice(0, 40);
 }
 
+export function getFieldEnemies(battle: BattleState): CombatEnemy[] {
+  const list: CombatEnemy[] = [];
+  const primary = battle.wave[battle.waveIndex];
+  if (primary) list.push(primary);
+  for (const add of battle.adds) {
+    list.push(add);
+  }
+  return list;
+}
+
+export function getLivingFieldEnemies(battle: BattleState): CombatEnemy[] {
+  return getFieldEnemies(battle).filter((e) => e.currentHp > 0);
+}
+
 export function getActiveEnemy(battle: BattleState): CombatEnemy {
+  const field = getFieldEnemies(battle);
+  if (battle.targetEnemyUid) {
+    const selected = field.find(
+      (e) => e.uid === battle.targetEnemyUid && e.currentHp > 0
+    );
+    if (selected) return selected;
+  }
+  const firstAlive = field.find((e) => e.currentHp > 0);
+  if (firstAlive) {
+    battle.targetEnemyUid = firstAlive.uid;
+    return firstAlive;
+  }
   return battle.wave[battle.waveIndex];
+}
+
+export function switchBattleTarget(
+  battle: BattleState,
+  uid?: string
+): CombatEnemy | null {
+  const living = getLivingFieldEnemies(battle);
+  if (living.length === 0) return null;
+  if (uid) {
+    const found = living.find((e) => e.uid === uid);
+    if (found) {
+      battle.targetEnemyUid = found.uid;
+      return found;
+    }
+  }
+  const currIdx = living.findIndex((e) => e.uid === battle.targetEnemyUid);
+  const next = living[(currIdx + 1) % living.length];
+  battle.targetEnemyUid = next.uid;
+  return next;
+}
+
+function getAttackerEnemy(battle: BattleState): CombatEnemy {
+  const field = getFieldEnemies(battle);
+  if (battle.pendingActorUid) {
+    const actor = field.find((e) => e.uid === battle.pendingActorUid);
+    if (actor) return actor;
+  }
+  return getLivingFieldEnemies(battle)[0] ?? getActiveEnemy(battle);
 }
 
 export function getEffectivePlayerCombatStats(
@@ -220,6 +323,28 @@ export function getEffectivePlayerCombatStats(
     computePlayerStats(player, battle.playerBuffs),
     battle.zone
   );
+}
+
+export function getEffectiveEnemyCombatStats(enemy: CombatEnemy): Stats {
+  if (!enemy.buffs || enemy.buffs.length === 0) return enemy.stats;
+  const s: Stats = { ...enemy.stats };
+  for (const buff of enemy.buffs) {
+    if (buff.type === 'atk_up') {
+      s.atk = Math.round(s.atk * (1 + buff.potency / 100));
+      s.matk = Math.round(s.matk * (1 + buff.potency / 100));
+    } else if (buff.type === 'def_up') {
+      s.def = Math.round(s.def * (1 + buff.potency / 100));
+      s.mdef = Math.round(s.mdef * (1 + buff.potency / 100));
+    } else if (buff.type === 'spd_up') {
+      s.speed = Math.round(s.speed * (1 + buff.potency / 100));
+    } else if (buff.type === 'armor_break') {
+      s.def = Math.max(0, Math.round(s.def * (1 - buff.potency / 100)));
+    } else if (buff.type === 'weaken') {
+      s.atk = Math.max(1, Math.round(s.atk * (1 - buff.potency / 100)));
+      s.matk = Math.max(1, Math.round(s.matk * (1 - buff.potency / 100)));
+    }
+  }
+  return s;
 }
 
 export interface CombatActionEvents {
@@ -271,7 +396,6 @@ export function tickBuffsAndCooldowns(
   player: PlayerState,
   events: CombatActionEvents
 ) {
-  // Tick player buffs (regen, etc.) + Weather passive turn effects
   const pStats = getEffectivePlayerCombatStats(player, battle);
   const weatherFx = getWeatherCombatEffect(battle.zone);
   const fireMult = getWeatherFireDamageMultiplier(battle.zone);
@@ -321,12 +445,11 @@ export function tickBuffsAndCooldowns(
   }
   battle.playerBuffs = nextPlayerBuffs;
 
-  // Tick enemy buffs (burn scaled by weather fire resistance!)
-  const enemy = getActiveEnemy(battle);
-  if (enemy && enemy.currentHp > 0) {
+  // Tick buffs/burn across all living field enemies
+  for (const enemy of getLivingFieldEnemies(battle)) {
     const nextEnemyBuffs: ActiveBuff[] = [];
     for (const b of enemy.buffs) {
-      if (b.type === 'burn') {
+      if (b.type === 'burn' && enemy.currentHp > 0) {
         const baseBurn = Math.max(4, Math.round((enemy.stats.hp * b.potency) / 200));
         const burnDmg = Math.max(2, Math.round(baseBurn * fireMult));
         enemy.currentHp = Math.max(0, enemy.currentHp - burnDmg);
@@ -338,12 +461,117 @@ export function tickBuffsAndCooldowns(
           burstCount: 6,
         });
         addBattleLog(battle, `${enemy.name} took ${burnDmg} Burn damage!`, 'hit');
+        if (enemy.currentHp > 0) {
+          checkBossPhaseTransition(battle, enemy, events);
+        }
       }
       if (b.turns - 1 > 0) {
         nextEnemyBuffs.push({ ...b, turns: b.turns - 1 });
       }
     }
     enemy.buffs = nextEnemyBuffs;
+  }
+}
+
+export function checkBossPhaseTransition(
+  battle: BattleState,
+  enemy: CombatEnemy,
+  events: CombatActionEvents
+) {
+  if (enemy.rarity !== 'boss' || enemy.currentHp <= 0) return;
+  const hpRatio = enemy.currentHp / Math.max(1, enemy.stats.hp);
+
+  // Phase 2 at <= 55% HP: Barrier + ATK boost + optional Summon
+  if (enemy.bossPhase === 1 && hpRatio <= 0.55) {
+    enemy.bossPhase = 2;
+    enemy.shieldHits = 2;
+    enemy.buffs = applyBuffToList(enemy.buffs, {
+      type: 'atk_up',
+      label: 'Phase 2 Fury',
+      isDebuff: false,
+      turns: 5,
+      potency: 20,
+    });
+    events.sfx.push('staggerBreak');
+    events.vfx.push({
+      target: 'enemy',
+      text: 'PHASE 2 · BARRIER!',
+      color: '#facc15',
+      yOffset: -36,
+      burstColor: '#facc15',
+      burstCount: 22,
+      ringColor: '#facc15',
+      hitstop: 0.06,
+      trauma: 0.55,
+    });
+    addBattleLog(
+      battle,
+      `${enemy.name} enters Phase 2! Gained 2-hit Barrier & +20% ATK!`,
+      'enemy'
+    );
+
+    if (
+      enemy.summonTemplateId &&
+      !enemy.summonedOnce &&
+      battle.adds.filter((a) => a.currentHp > 0).length < 2
+    ) {
+      const add = spawnEnemyFromTemplate(enemy.summonTemplateId);
+      add.isAdd = true;
+      enemy.summonedOnce = true;
+      battle.adds.push(add);
+      events.vfx.push({
+        target: 'enemy',
+        text: `SUMMONED ${add.name.toUpperCase()}!`,
+        color: '#c084fc',
+        yOffset: -54,
+        burstColor: '#c084fc',
+        burstCount: 16,
+      });
+      addBattleLog(battle, `${enemy.name} summoned ${add.name} to the field!`, 'enemy');
+    }
+  }
+
+  // Phase 3 Enrage at <= 28% HP
+  if (enemy.bossPhase < 3 && hpRatio <= 0.28) {
+    enemy.bossPhase = 3;
+    enemy.enraged = true;
+    if (enemy.enragedSpecialName) {
+      enemy.specialName = enemy.enragedSpecialName;
+    }
+    enemy.specialMult = Math.round(enemy.specialMult * 1.2 * 100) / 100;
+    enemy.ultimateCharge = Math.min(100, enemy.ultimateCharge + 50);
+    enemy.buffs = applyBuffToList(enemy.buffs, {
+      type: 'atk_up',
+      label: 'ENRAGED',
+      isDebuff: false,
+      turns: 99,
+      potency: 35,
+    });
+    enemy.buffs = applyBuffToList(enemy.buffs, {
+      type: 'spd_up',
+      label: 'Frenzy',
+      isDebuff: false,
+      turns: 99,
+      potency: 30,
+    });
+    events.sfx.push('ultimate');
+    events.vfx.push({
+      target: 'enemy',
+      text: 'ENRAGED!!',
+      color: '#f43f5e',
+      yOffset: -44,
+      burstColor: '#f43f5e',
+      burstCount: 28,
+      ringColor: '#f43f5e',
+      flashColor: '#f43f5e',
+      hitstop: 0.08,
+      trauma: 0.78,
+    });
+    addBattleLog(
+      battle,
+      `${enemy.name} is ENRAGED! (+35% ATK/MATK, ${enemy.specialName})`,
+      'enemy'
+    );
   }
 }
 
@@ -364,9 +592,9 @@ export function executePlayerAction(
   const enemy = getActiveEnemy(battle);
   const pStats = getEffectivePlayerCombatStats(player, battle);
   const weatherFx = getWeatherCombatEffect(battle.zone);
+  const vanguardStaggerMult = player.tier3Branch === 'vanguard' ? 1.3 : 1;
   battle.playerGuarding = false;
 
-  // Tick existing skill cooldowns when taking a turn action (excluding any skill cast this turn)
   const usedSkillId = action.kind === 'skill' ? action.skillId : null;
   if (action.kind !== 'skill') {
     for (const id of Object.keys(battle.skillCooldowns)) {
@@ -378,16 +606,44 @@ export function executePlayerAction(
 
   if (action.kind === 'guard') {
     battle.playerGuarding = true;
-    player.currentMp = Math.min(pStats.mp, player.currentMp + 8);
-    player.ultimateCharge = Math.min(100, player.ultimateCharge + 14);
+    const hasRiposte = player.unlockedSkillIds.includes('def_t2_riposte');
+    const mpGain = hasRiposte ? 18 : 8;
+    const ultGain = hasRiposte ? 24 : 14;
+    player.currentMp = Math.min(pStats.mp, player.currentMp + mpGain);
+    player.ultimateCharge = Math.min(100, player.ultimateCharge + ultGain);
+
+    if (hasRiposte) {
+      battle.comboCount += 1;
+      battle.comboFlashSeq += 1;
+      battle.maxComboCount = Math.max(battle.maxComboCount, battle.comboCount);
+      events.sfx.push('comboUp');
+      events.vfx.push({
+        target: 'player',
+        text: 'RIPOSTE +1 COMBO',
+        color: '#facc15',
+        yOffset: -18,
+      });
+    }
+
+    if (player.tier3Branch === 'vanguard') {
+      const healAmt = Math.max(6, Math.round(pStats.hp * 0.06));
+      player.currentHp = Math.min(pStats.hp, player.currentHp + healAmt);
+      events.vfx.push({
+        target: 'player',
+        text: `BULWARK +${healAmt} HP`,
+        color: '#4ade80',
+        yOffset: -32,
+      });
+    }
+
     events.sfx.push('block');
     events.vfx.push({
       target: 'player',
-      text: 'GUARD +8 MP',
+      text: `GUARD +${mpGain} MP`,
       color: '#38bdf8',
       ringColor: '#38bdf8',
     });
-    addBattleLog(battle, `${player.name} braces in Guard (+8 MP).`, 'info');
+    addBattleLog(battle, `${player.name} braces in Guard (+${mpGain} MP).`, 'info');
     finishPlayerTurn(battle, player, events);
     return events;
   }
@@ -437,7 +693,7 @@ export function executePlayerAction(
       addBattleLog(battle, `Drank ${item.name}!`, 'info');
     } else if (item.kind === 'stagger_bomb') {
       const comboBonuses = getComboBonuses(battle.comboCount);
-      const scaledStagger = Math.round(item.power * comboBonuses.staggerMult);
+      const scaledStagger = Math.round(item.power * comboBonuses.staggerMult * vanguardStaggerMult);
       battle.playerAnim = 'attack';
       battle.playerAnimTimer = 0.35;
       battle.comboCount += 1;
@@ -467,17 +723,33 @@ export function executePlayerAction(
     player.ultimateCharge = Math.min(100, player.ultimateCharge + 16);
 
     const comboBonuses = getComboBonuses(battle.comboCount);
+    const hasCascade =
+      player.unlockedSkillIds.includes('phy_t2_cascade') && battle.comboCount >= 3;
     const boostedAttacker = {
       ...pStats,
-      critDmg: pStats.critDmg + comboBonuses.critDmgBonus,
+      critDmg: pStats.critDmg + comboBonuses.critDmgBonus + (hasCascade ? 10 : 0),
     };
-    const res = calculateDamage(boostedAttacker, enemy.stats, {
+    const eStats = getEffectiveEnemyCombatStats(enemy);
+    const res = calculateDamage(boostedAttacker, eStats, {
       damageType: 'physical',
       powerMult: 1.0,
-      staggerPower: Math.round(24 * comboBonuses.staggerMult * weatherFx.staggerMult),
+      staggerPower: Math.round(24 * comboBonuses.staggerMult * weatherFx.staggerMult * vanguardStaggerMult),
       defenderIsStaggered: enemy.staggeredTurns > 0,
+      damageMult: hasCascade ? 1.18 : 1,
     });
     applyPlayerDamageResult(battle, player, enemy, 'Basic Strike', res, events);
+
+    // Astral Spellblade trait: physical strikes ignite Burn!
+    if (!res.isDodged && enemy.currentHp > 0 && player.tier3Branch === 'spellblade') {
+      enemy.buffs = applyBuffToList(enemy.buffs, {
+        type: 'burn',
+        label: 'Arcane Burn',
+        isDebuff: true,
+        turns: 2,
+        potency: 14,
+      });
+    }
+
     finishPlayerTurn(battle, player, events);
     return events;
   }
@@ -498,14 +770,26 @@ export function executePlayerAction(
         atk: Math.round(pStats.atk + usedDmg * 0.35),
         critDmg: pStats.critDmg + usedHits * 12,
       };
-      const res = calculateDamage(finisherAttacker, enemy.stats, {
+      const eStats = getEffectiveEnemyCombatStats(enemy);
+      const res = calculateDamage(finisherAttacker, eStats, {
         damageType: 'physical',
         powerMult: 1.55 + usedHits * 0.14,
-        staggerPower: Math.round((55 + usedHits * 6) * weatherFx.staggerMult),
+        staggerPower: Math.round((55 + usedHits * 6) * weatherFx.staggerMult * vanguardStaggerMult),
         defenderIsStaggered: enemy.staggeredTurns > 0,
         forceCrit: true,
         allowDodge: false,
       });
+
+      if (enemy.shieldHits > 0) {
+        enemy.shieldHits -= 1;
+        res.damage = Math.max(1, Math.round(res.damage * 0.5));
+        events.vfx.push({
+          target: 'enemy',
+          text: `BARRIER CRACKED (${enemy.shieldHits})`,
+          color: '#facc15',
+          yOffset: -22,
+        });
+      }
 
       enemy.currentHp = Math.max(0, enemy.currentHp - res.damage);
       enemy.animState = enemy.currentHp === 0 ? 'death' : 'hit';
@@ -531,12 +815,12 @@ export function executePlayerAction(
       applyPassiveProcsOnHit(battle, player, pStats, res, events);
       if (enemy.currentHp > 0) {
         dealStaggerToEnemy(battle, enemy, res.staggerDamage, events);
+        checkBossPhaseTransition(battle, enemy, events);
       }
       finishPlayerTurn(battle, player, events);
       return events;
     }
 
-    // Stagger Execute: spends 3+ combo stack to deal 135% ATK and force instant Stagger Break
     if (!canUseStaggerExecute(battle)) return events;
     const usedHits = battle.comboCount;
     battle.comboCount = 0;
@@ -545,7 +829,8 @@ export function executePlayerAction(
     battle.playerAnimTimer = 0.44;
     player.ultimateCharge = Math.min(100, player.ultimateCharge + 16);
 
-    const res = calculateDamage(pStats, enemy.stats, {
+    const eStats = getEffectiveEnemyCombatStats(enemy);
+    const res = calculateDamage(pStats, eStats, {
       damageType: 'physical',
       powerMult: 1.35 + usedHits * 0.06,
       staggerPower: enemy.currentStagger,
@@ -574,6 +859,7 @@ export function executePlayerAction(
     applyPassiveProcsOnHit(battle, player, pStats, res, events);
     if (enemy.currentHp > 0) {
       dealStaggerToEnemy(battle, enemy, Math.max(1, enemy.currentStagger), events);
+      checkBossPhaseTransition(battle, enemy, events);
     }
     finishPlayerTurn(battle, player, events);
     return events;
@@ -638,6 +924,35 @@ export function executePlayerAction(
       addBattleLog(battle, `${skill.name} heals ${healAmt} HP!`, 'heal');
     }
 
+    // Combo Synergy: Inspiring Cadence (sup_t2_momentum) on heal/buff skills
+    if (
+      (skill.damageType === 'heal' || skill.damageType === 'buff') &&
+      player.unlockedSkillIds.includes('sup_t2_momentum')
+    ) {
+      battle.comboCount += 1;
+      battle.comboFlashSeq += 1;
+      battle.maxComboCount = Math.max(battle.maxComboCount, battle.comboCount);
+      events.sfx.push('comboUp');
+      events.vfx.push({
+        target: 'player',
+        text: 'CADENCE +1 COMBO',
+        color: '#4ade80',
+        yOffset: -28,
+      });
+      if (battle.comboCount >= 4) {
+        for (const cid of Object.keys(battle.skillCooldowns)) {
+          if (cid !== skill.id && battle.skillCooldowns[cid] > 0) {
+            battle.skillCooldowns[cid] = Math.max(0, battle.skillCooldowns[cid] - 1);
+          }
+        }
+        addBattleLog(
+          battle,
+          `Inspiring Cadence (${battle.comboCount}x Combo) shaved 1t off skill cooldowns!`,
+          'heal'
+        );
+      }
+    }
+
     if (skill.buffApplied) {
       const b = skill.buffApplied;
       if (b.target === 'self') {
@@ -675,23 +990,50 @@ export function executePlayerAction(
       skill.damageType === 'debuff'
     ) {
       const comboBonuses = getComboBonuses(battle.comboCount);
-      // Hybrid Apex Zenith scales with ATK + MATK; active combo scales Crit DMG & Stagger DMG
+      const isPhysicalSkill = skill.damageType === 'physical' || skill.damageType === 'debuff';
+      const hasCascade =
+        isPhysicalSkill &&
+        player.unlockedSkillIds.includes('phy_t2_cascade') &&
+        battle.comboCount >= 3;
+
       const baseOffense =
         skill.id === 'all_t2_ult'
           ? { ...pStats, atk: pStats.atk + Math.round(pStats.matk * 0.85) }
+          : skill.id === 'spd_t3_ult'
+          ? { ...pStats, atk: pStats.atk + Math.round(pStats.speed * 1.4) }
           : pStats;
       const effectiveAttacker = {
         ...baseOffense,
-        critDmg: baseOffense.critDmg + comboBonuses.critDmgBonus,
+        critDmg: baseOffense.critDmg + comboBonuses.critDmgBonus + (hasCascade ? 10 : 0),
       };
       const scaledStaggerPower = Math.round(
-        (skill.staggerPower ?? 30) * comboBonuses.staggerMult * weatherFx.staggerMult
+        (skill.staggerPower ?? 30) *
+          comboBonuses.staggerMult *
+          weatherFx.staggerMult *
+          vanguardStaggerMult
       );
       let weatherDmgMult = skill.damageType === 'magical' ? weatherFx.magicDmgMult : 1;
       if (isFireSkillId(skill.id)) {
         weatherDmgMult *= getWeatherFireDamageMultiplier(battle.zone);
       }
-      const res = calculateDamage(effectiveAttacker, enemy.stats, {
+      if (hasCascade) {
+        weatherDmgMult *= 1.18;
+      }
+      if (
+        skill.damageType === 'magical' &&
+        player.tier3Branch === 'spellblade' &&
+        battle.comboCount >= 3
+      ) {
+        weatherDmgMult *= 1.18;
+      }
+
+      const rawEnemyStats = getEffectiveEnemyCombatStats(enemy);
+      const effectiveDefenderStats =
+        skill.passiveTag === 'armor_pierce'
+          ? { ...rawEnemyStats, def: Math.round(rawEnemyStats.def * 0.7) }
+          : rawEnemyStats;
+
+      const res = calculateDamage(effectiveAttacker, effectiveDefenderStats, {
         damageType: skill.damageType === 'magical' ? 'magical' : 'physical',
         powerMult: skill.powerMult ?? 1.3,
         staggerPower: scaledStaggerPower,
@@ -699,6 +1041,11 @@ export function executePlayerAction(
         bonusCrit: skill.passiveTag === 'high_crit' ? 25 : 0,
         damageMult: weatherDmgMult,
       });
+
+      if (skill.id === 'spd_t3_ult' && !res.isDodged) {
+        battle.comboCount += 2; // +2 here + 1 in applyPlayerDamageResult = +3 total!
+      }
+
       applyPlayerDamageResult(
         battle,
         player,
@@ -708,6 +1055,56 @@ export function executePlayerAction(
         events,
         action.kind === 'ultimate'
       );
+
+      if (!res.isDodged && enemy.currentHp > 0 && skill.damageType === 'physical' && player.tier3Branch === 'spellblade') {
+        enemy.buffs = applyBuffToList(enemy.buffs, {
+          type: 'burn',
+          label: 'Arcane Burn',
+          isDebuff: true,
+          turns: 2,
+          potency: 14,
+        });
+      }
+
+      // Combo Synergy: Elemental Resonance (mag_t2_resonance) on magical skills
+      if (
+        !res.isDodged &&
+        enemy.currentHp > 0 &&
+        skill.damageType === 'magical' &&
+        player.unlockedSkillIds.includes('mag_t2_resonance')
+      ) {
+        let hadBurn = false;
+        enemy.buffs = enemy.buffs.map((b) => {
+          if (b.isDebuff) {
+            if (b.type === 'burn') hadBurn = true;
+            return { ...b, turns: b.turns + 1 };
+          }
+          return b;
+        });
+        if (hadBurn) {
+          const sparkDmg = Math.max(5, Math.round(pStats.matk * 0.45));
+          enemy.currentHp = Math.max(0, enemy.currentHp - sparkDmg);
+          battle.comboDamage += sparkDmg;
+          events.vfx.push({
+            target: 'enemy',
+            text: `RESONANCE +${sparkDmg}`,
+            color: '#38bdf8',
+            yOffset: -18,
+            burstColor: '#fb923c',
+            burstCount: 10,
+          });
+          addBattleLog(
+            battle,
+            `Elemental Resonance detonated Burn for +${sparkDmg} DMG & extended debuffs +1t!`,
+            'crit'
+          );
+          if (enemy.currentHp > 0) {
+            checkBossPhaseTransition(battle, enemy, events);
+          }
+        } else if (enemy.buffs.some((b) => b.isDebuff)) {
+          addBattleLog(battle, `Elemental Resonance extended enemy debuffs +1t!`, 'info');
+        }
+      }
     }
 
     finishPlayerTurn(battle, player, events);
@@ -726,7 +1123,7 @@ function dealStaggerToEnemy(
   if (enemy.staggeredTurns > 0 || enemy.currentHp <= 0) return;
   enemy.currentStagger = Math.max(0, enemy.currentStagger - amount);
   if (enemy.currentStagger === 0) {
-    enemy.staggeredTurns = 2; // Staggered! Skips turn and takes 1.5x damage
+    enemy.staggeredTurns = 2;
     enemy.animState = 'staggered';
     enemy.animTimer = 1.1;
     if (battle.comboCount > 0) {
@@ -760,7 +1157,6 @@ function applyPassiveProcsOnHit(
 ) {
   if (res.isDodged) return;
 
-  // Passive Proc: Crit Surge (Farmhand Grit / Titan Edge)
   if (
     res.isCrit &&
     (player.unlockedSkillIds.includes('phy_t1_might') ||
@@ -780,7 +1176,6 @@ function applyPassiveProcsOnHit(
     });
   }
 
-  // Passive Proc: Harvest Drain (Hearty Harvest / Heroic Awakening)
   if (
     player.unlockedSkillIds.includes('all_t1_seed') ||
     player.unlockedSkillIds.includes('all_t2_awakening')
@@ -813,12 +1208,31 @@ function applyPlayerDamageResult(
     return;
   }
 
+  // Boss Phase 2 Barrier absorbs 50% damage for shieldHits charges
+  if (enemy.shieldHits > 0) {
+    enemy.shieldHits -= 1;
+    res.damage = Math.max(1, Math.round(res.damage * 0.5));
+    res.staggerDamage = Math.max(1, Math.round(res.staggerDamage * 0.65));
+    events.vfx.push({
+      target: 'enemy',
+      text: `BARRIER (${enemy.shieldHits} LEFT)`,
+      color: '#facc15',
+      yOffset: -20,
+    });
+  }
+
   enemy.currentHp = Math.max(0, enemy.currentHp - res.damage);
   enemy.animState = enemy.currentHp === 0 ? 'death' : 'hit';
   enemy.animTimer = enemy.currentHp === 0 ? 0.65 : 0.36;
 
-  // Build combo sequence & accumulate total combo damage
-  battle.comboCount += 1;
+  // Build combo sequence & accumulate total combo damage (+extra stack from Shadowstrider/Relentless Flurry on crit)
+  const extraComboFromCrit =
+    res.isCrit &&
+    (player.unlockedSkillIds.includes('spd_t3_tempo') ||
+      player.tier3Branch === 'shadowstrider')
+      ? 1
+      : 0;
+  battle.comboCount += 1 + extraComboFromCrit;
   battle.comboDamage += res.damage;
   battle.comboFlashSeq += 1;
   battle.maxComboCount = Math.max(battle.maxComboCount, battle.comboCount);
@@ -881,7 +1295,138 @@ function applyPlayerDamageResult(
 
   if (enemy.currentHp > 0) {
     dealStaggerToEnemy(battle, enemy, res.staggerDamage, events);
+    checkBossPhaseTransition(battle, enemy, events);
   }
+}
+
+function executePetAssistIfReady(
+  battle: BattleState,
+  player: PlayerState,
+  events: CombatActionEvents
+) {
+  if (!player.equippedPetId) return;
+  const pet = PET_CATALOG.find((p) => p.id === player.equippedPetId);
+  if (!pet) return;
+
+  battle.petTurnCounter += 1;
+  if (battle.petTurnCounter < pet.assistEveryTurns) return;
+  battle.petTurnCounter = 0;
+
+  const pStats = getEffectivePlayerCombatStats(player, battle);
+  if (pet.assistKind === 'heal_shield') {
+    const healAmt = Math.max(8, Math.round((pStats.hp * pet.assistPower) / 100));
+    player.currentHp = Math.min(pStats.hp, player.currentHp + healAmt);
+    battle.playerBuffs = applyBuffToList(battle.playerBuffs, {
+      type: 'def_up',
+      label: pet.assistName,
+      isDebuff: false,
+      turns: 2,
+      potency: 25,
+    });
+    events.sfx.push('heal');
+    events.vfx.push({
+      target: 'player',
+      text: `${pet.name.toUpperCase()}: +${healAmt} HP`,
+      color: pet.accent,
+      yOffset: -36,
+      ringColor: pet.accent,
+    });
+    addBattleLog(
+      battle,
+      `${pet.name} cast ${pet.assistName}: +${healAmt} HP & +25% DEF!`,
+      'heal'
+    );
+    return;
+  }
+
+  const target = getActiveEnemy(battle);
+  if (!target || target.currentHp <= 0) return;
+
+  const eStats = getEffectiveEnemyCombatStats(target);
+  const attacker: Stats =
+    pet.assistKind === 'hybrid_ult'
+      ? { ...pStats, atk: pStats.atk + Math.round(pStats.matk * 0.7) }
+      : pStats;
+  const res = calculateDamage(attacker, eStats, {
+    damageType: pet.assistKind === 'magical_burn' ? 'magical' : 'physical',
+    powerMult: pet.assistPower,
+    staggerPower: pet.assistKind === 'hybrid_ult' ? 26 : 14,
+    defenderIsStaggered: target.staggeredTurns > 0,
+    allowDodge: false,
+  });
+
+  target.currentHp = Math.max(0, target.currentHp - res.damage);
+  target.animState = target.currentHp === 0 ? 'death' : 'hit';
+  target.animTimer = target.currentHp === 0 ? 0.65 : 0.3;
+  battle.comboCount += 1;
+  battle.comboDamage += res.damage;
+  battle.comboFlashSeq += 1;
+  battle.maxComboCount = Math.max(battle.maxComboCount, battle.comboCount);
+  battle.maxComboDamage = Math.max(battle.maxComboDamage, battle.comboDamage);
+
+  if (pet.assistKind === 'magical_burn' && target.currentHp > 0) {
+    target.buffs = applyBuffToList(target.buffs, {
+      type: 'burn',
+      label: 'Cinder Burn',
+      isDebuff: true,
+      turns: 2,
+      potency: 14,
+    });
+  }
+  if (pet.assistKind === 'hybrid_ult') {
+    player.ultimateCharge = Math.min(100, player.ultimateCharge + 10);
+  }
+
+  events.sfx.push('hit', 'comboUp');
+  events.vfx.push({
+    target: 'enemy',
+    text: `${pet.name.toUpperCase()} -${res.damage}`,
+    color: pet.accent,
+    yOffset: -24,
+    burstColor: pet.accent,
+    burstCount: 10,
+  });
+  addBattleLog(
+    battle,
+    `${pet.name} assisted with ${pet.assistName} for ${res.damage} DMG!`,
+    'hit'
+  );
+  if (target.currentHp > 0) {
+    dealStaggerToEnemy(battle, target, res.staggerDamage, events);
+    checkBossPhaseTransition(battle, target, events);
+  }
+}
+
+function awardDefeatedEnemiesOnField(
+  battle: BattleState,
+  player: PlayerState,
+  events: CombatActionEvents
+): boolean {
+  const deadUnprocessed = getFieldEnemies(battle).filter(
+    (e) => e.currentHp <= 0 && !battle.processedDefeatUids.includes(e.uid)
+  );
+  for (const dead of deadUnprocessed) {
+    grantEnemyDefeatRewards(battle, player, dead, events);
+  }
+
+  const living = getLivingFieldEnemies(battle);
+  if (living.length > 0) {
+    if (!living.some((e) => e.uid === battle.targetEnemyUid)) {
+      battle.targetEnemyUid = living[0].uid;
+    }
+    return false;
+  }
+
+  // All field enemies defeated -> wave transition or battle victory
+  if (battle.waveIndex + 1 < battle.wave.length) {
+    battle.phase = 'wave_transition';
+    battle.phaseTimer = 0.85;
+  } else {
+    battle.phase = 'victory';
+    battle.phaseTimer = 0.6;
+    events.sfx.push('victory');
+  }
+  return true;
 }
 
 function finishPlayerTurn(
@@ -889,28 +1434,42 @@ function finishPlayerTurn(
   player: PlayerState,
   events: CombatActionEvents
 ) {
-  const enemy = getActiveEnemy(battle);
-  if (enemy.currentHp <= 0) {
-    handleEnemyDefeated(battle, player, enemy, events);
+  // Trigger pet familiar assist if timer reached
+  if (getLivingFieldEnemies(battle).length > 0) {
+    executePetAssistIfReady(battle, player, events);
+  }
+
+  if (awardDefeatedEnemiesOnField(battle, player, events)) {
     return;
   }
+
+  const living = getLivingFieldEnemies(battle);
+  battle.pendingEnemyQueue = living.map((e) => e.uid);
+  const firstActor = living[0];
+  battle.pendingActorUid = firstActor.uid;
   battle.phase = 'animating';
   battle.phaseTimer = 0.48;
   battle.pendingEnemyAction =
-    enemy.ultimateCharge >= 100 || Math.random() < 0.36 ? 'special' : 'basic';
+    firstActor.ultimateCharge >= 100 || Math.random() < (firstActor.enraged ? 0.5 : 0.36)
+      ? 'special'
+      : 'basic';
 }
 
-export function handleEnemyDefeated(
+function grantEnemyDefeatRewards(
   battle: BattleState,
   player: PlayerState,
   enemy: CombatEnemy,
   events: CombatActionEvents
 ) {
+  if (battle.processedDefeatUids.includes(enemy.uid)) return;
+  battle.processedDefeatUids.push(enemy.uid);
+
   enemy.animState = 'death';
   enemy.animTimer = 0.6;
   player.monstersDefeated += 1;
   player.gold += enemy.goldReward;
-  player.materials[enemy.materialDrop.id] += enemy.materialDrop.amount;
+  player.materials[enemy.materialDrop.id] =
+    (player.materials[enemy.materialDrop.id] ?? 0) + enemy.materialDrop.amount;
 
   const xpRes = grantXp(player, enemy.xpReward);
   Object.assign(player, xpRes.player);
@@ -934,14 +1493,13 @@ export function handleEnemyDefeated(
     });
   }
 
-  // Loot drop chance scaled by enemy rarity & zone
   const dropChance =
     enemy.rarity === 'boss' ? 1.0 : enemy.rarity === 'elite' ? 0.55 : 0.28;
   if (Math.random() < dropChance) {
     const slots: EquipmentSlot[] = ['weapon', 'armor', 'helm', 'charm'];
     const slot = slots[Math.floor(Math.random() * slots.length)];
-    const rarity = rollRarityForEnemy(enemy.rarity, battle.zone);
-    const gear = generateEquipment(slot, rarity, battle.zone);
+    const rarity = rollRarityForEnemy(enemy.rarity, enemy.zone);
+    const gear = generateEquipment(slot, rarity, enemy.zone);
     player.inventory.push(gear);
     battle.rewards.items.push(gear);
   }
@@ -951,15 +1509,16 @@ export function handleEnemyDefeated(
     `${enemy.name} defeated! +${enemy.xpReward} XP, +${enemy.goldReward}G, +${enemy.materialDrop.amount} ${MATERIAL_META[enemy.materialDrop.id].name}`,
     'stagger'
   );
+}
 
-  if (battle.waveIndex + 1 < battle.wave.length) {
-    battle.phase = 'wave_transition';
-    battle.phaseTimer = 0.85;
-  } else {
-    battle.phase = 'victory';
-    battle.phaseTimer = 0.6;
-    events.sfx.push('victory');
-  }
+export function handleEnemyDefeated(
+  battle: BattleState,
+  player: PlayerState,
+  enemy: CombatEnemy,
+  events: CombatActionEvents
+) {
+  grantEnemyDefeatRewards(battle, player, enemy, events);
+  awardDefeatedEnemiesOnField(battle, player, events);
 }
 
 export function stepBattleTimeline(
@@ -968,23 +1527,23 @@ export function stepBattleTimeline(
   dt: number
 ): CombatActionEvents {
   const events: CombatActionEvents = { sfx: [], vfx: [] };
-  const enemy = getActiveEnemy(battle);
 
-  // Decay actor anim timers back to idle/staggered
+  // Decay actor anim timers back to idle/staggered across all enemies
   if (battle.playerAnimTimer > 0) {
     battle.playerAnimTimer -= dt;
     if (battle.playerAnimTimer <= 0) {
       battle.playerAnim = 'idle';
     }
   }
-  if (enemy && enemy.animTimer > 0) {
-    enemy.animTimer -= dt;
-    if (enemy.animTimer <= 0 && enemy.currentHp > 0) {
-      enemy.animState = enemy.staggeredTurns > 0 ? 'staggered' : 'idle';
+  for (const en of getFieldEnemies(battle)) {
+    if (en.animTimer > 0) {
+      en.animTimer -= dt;
+      if (en.animTimer <= 0 && en.currentHp > 0) {
+        en.animState = en.staggeredTurns > 0 ? 'staggered' : 'idle';
+      }
     }
   }
 
-  // QTE Cursor movement for Dodge & Counter Attack
   if (battle.phase === 'qte_dodge' || battle.phase === 'qte_counter') {
     const qte = battle.qte;
     if (qte.result === 'pending') {
@@ -998,7 +1557,7 @@ export function stepBattleTimeline(
       }
       qte.resultTimer -= dt;
       if (qte.resultTimer <= 0) {
-        resolveQteInput(battle, player, true, events); // Timed out -> fail
+        resolveQteInput(battle, player, true, events);
       }
     }
     return events;
@@ -1017,7 +1576,33 @@ export function stepBattleTimeline(
 
   if (battle.phase === 'wave_transition') {
     battle.waveIndex += 1;
-    const nextEnemy = getActiveEnemy(battle);
+    battle.adds = [];
+    battle.pendingEnemyQueue = [];
+    battle.pendingActorUid = null;
+    const nextEnemy = battle.wave[battle.waveIndex];
+    battle.targetEnemyUid = nextEnemy?.uid ?? null;
+
+    if (battle.arenaTrialId) {
+      const pStats = getEffectivePlayerCombatStats(player, battle);
+      const hpRec = Math.round(pStats.hp * 0.25);
+      const mpRec = Math.round(pStats.mp * 0.25);
+      player.currentHp = Math.min(pStats.hp, player.currentHp + hpRec);
+      player.currentMp = Math.min(pStats.mp, player.currentMp + mpRec);
+      addBattleLog(
+        battle,
+        `Arena Breather: Restored +${hpRec} HP & +${mpRec} MP before next challenger!`,
+        'heal'
+      );
+    } else if (nextEnemy) {
+      const tpl = ENEMY_TEMPLATES.find((t) => t.id === nextEnemy.templateId);
+      if (tpl?.dualPartnerId) {
+        const partner = spawnEnemyFromTemplate(tpl.dualPartnerId);
+        partner.isAdd = true;
+        battle.adds.push(partner);
+        addBattleLog(battle, `${partner.name} joins ${nextEnemy.name}!`, 'enemy');
+      }
+    }
+
     addBattleLog(
       battle,
       `Wave ${battle.waveIndex + 1}/${battle.wave.length}: ${nextEnemy.name} appears!`,
@@ -1030,15 +1615,58 @@ export function stepBattleTimeline(
   return events;
 }
 
+function advanceEnemyTurnOrEndRound(
+  battle: BattleState,
+  player: PlayerState,
+  events: CombatActionEvents
+) {
+  if (player.currentHp <= 0) {
+    battle.phase = 'defeat';
+    events.sfx.push('defeat');
+    return;
+  }
+
+  // Remove processed actor from queue
+  const currentActorUid = battle.pendingActorUid;
+  battle.pendingEnemyQueue = battle.pendingEnemyQueue.filter((uid) => {
+    if (uid === currentActorUid) return false;
+    const found = getFieldEnemies(battle).find((e) => e.uid === uid);
+    return Boolean(found && found.currentHp > 0);
+  });
+
+  if (battle.pendingEnemyQueue.length > 0) {
+    const nextUid = battle.pendingEnemyQueue[0];
+    const nextEnemy = getFieldEnemies(battle).find((e) => e.uid === nextUid);
+    if (nextEnemy && nextEnemy.currentHp > 0) {
+      battle.pendingActorUid = nextUid;
+      battle.pendingEnemyAction =
+        nextEnemy.ultimateCharge >= 100 || Math.random() < 0.3 ? 'special' : 'basic';
+      executeEnemyTurn(battle, player, events);
+      return;
+    }
+  }
+
+  // All living enemies finished their round -> tick buffs/burn!
+  tickBuffsAndCooldowns(battle, player, events);
+  if (awardDefeatedEnemiesOnField(battle, player, events)) {
+    return;
+  }
+  battle.pendingActorUid = null;
+  battle.turnCount += 1;
+  battle.phase = 'player_turn';
+}
+
 function executeEnemyTurn(
   battle: BattleState,
   player: PlayerState,
   events: CombatActionEvents
 ) {
-  const enemy = getActiveEnemy(battle);
-  if (!enemy || enemy.currentHp <= 0) return;
+  const enemy = getAttackerEnemy(battle);
+  if (!enemy || enemy.currentHp <= 0) {
+    advanceEnemyTurnOrEndRound(battle, player, events);
+    return;
+  }
 
-  // Recover from stagger?
   if (enemy.staggeredTurns > 0) {
     enemy.staggeredTurns -= 1;
     if (enemy.staggeredTurns === 0) {
@@ -1047,27 +1675,48 @@ function executeEnemyTurn(
       addBattleLog(battle, `${enemy.name} recovers from Stagger!`, 'info');
     } else {
       addBattleLog(battle, `${enemy.name} is Staggered and loses its turn!`, 'stagger');
-      tickBuffsAndCooldowns(battle, player, events);
-      if (enemy.currentHp <= 0) {
-        handleEnemyDefeated(battle, player, enemy, events);
-        return;
-      }
-      battle.turnCount += 1;
-      battle.phase = 'player_turn';
+      advanceEnemyTurnOrEndRound(battle, player, events);
       return;
     }
   }
 
+  // Summoner monsters conjure an ally add once when alone on field
+  if (
+    enemy.rarity !== 'boss' &&
+    enemy.summonTemplateId &&
+    !enemy.summonedOnce &&
+    battle.adds.filter((a) => a.currentHp > 0).length === 0
+  ) {
+    const add = spawnEnemyFromTemplate(enemy.summonTemplateId);
+    add.isAdd = true;
+    enemy.summonedOnce = true;
+    battle.adds.push(add);
+    enemy.animState = 'attack';
+    enemy.animTimer = 0.4;
+    events.sfx.push('heal');
+    events.vfx.push({
+      target: 'enemy',
+      text: `SUMMONED ${add.name.toUpperCase()}!`,
+      color: '#c084fc',
+      yOffset: -30,
+      burstColor: '#c084fc',
+      burstCount: 16,
+    });
+    addBattleLog(battle, `${enemy.name} summoned ${add.name} into battle!`, 'enemy');
+    advanceEnemyTurnOrEndRound(battle, player, events);
+    return;
+  }
+
   const pStats = getEffectivePlayerCombatStats(player, battle);
+  const eStats = getEffectiveEnemyCombatStats(enemy);
   const enemyFireMult = isFireEnemySprite(enemy.sprite)
     ? getWeatherFireDamageMultiplier(battle.zone)
     : 1;
   const isSpecial = battle.pendingEnemyAction === 'special';
 
   if (isSpecial) {
-    // Launch Dodge QTE!
     enemy.ultimateCharge = 0;
-    const res = calculateDamage(enemy.stats, pStats, {
+    const res = calculateDamage(eStats, pStats, {
       damageType: 'physical',
       powerMult: enemy.specialMult,
       staggerPower: enemy.specialStagger,
@@ -1082,7 +1731,7 @@ function executeEnemyTurn(
       phase: 'dodge',
       promptLabel: `DODGE ${enemy.specialName.toUpperCase()}!`,
       cursor: 0.05,
-      speed: 1.55 + battle.zone * 0.12,
+      speed: 1.55 + battle.zone * 0.11 + (enemy.enraged ? 0.2 : 0),
       direction: 1,
       zoneStart: 0.36,
       zoneEnd: 0.64,
@@ -1103,9 +1752,9 @@ function executeEnemyTurn(
   // Standard Enemy Attack
   enemy.animState = 'attack';
   enemy.animTimer = 0.36;
-  enemy.ultimateCharge = Math.min(100, enemy.ultimateCharge + 35);
-  const dmgType = enemy.stats.matk > enemy.stats.atk ? 'magical' : 'physical';
-  const res = calculateDamage(enemy.stats, pStats, {
+  enemy.ultimateCharge = Math.min(100, enemy.ultimateCharge + (enemy.enraged ? 50 : 35));
+  const dmgType = eStats.matk > eStats.atk ? 'magical' : 'physical';
+  const res = calculateDamage(eStats, pStats, {
     damageType: dmgType,
     powerMult: 1.0,
     staggerPower: 18,
@@ -1114,20 +1763,11 @@ function executeEnemyTurn(
     damageMult: enemyFireMult,
   });
 
-  applyDamageToPlayer(battle, player, enemy.name, 'Attack', res, events);
-  if (player.currentHp <= 0) {
-    battle.phase = 'defeat';
-    events.sfx.push('defeat');
+  applyDamageToPlayer(battle, player, enemy, 'Attack', res, events);
+  if (awardDefeatedEnemiesOnField(battle, player, events)) {
     return;
   }
-
-  tickBuffsAndCooldowns(battle, player, events);
-  if (enemy.currentHp <= 0) {
-    handleEnemyDefeated(battle, player, enemy, events);
-    return;
-  }
-  battle.turnCount += 1;
-  battle.phase = 'player_turn';
+  advanceEnemyTurnOrEndRound(battle, player, events);
 }
 
 export function resolveQteInput(
@@ -1141,7 +1781,7 @@ export function resolveQteInput(
     return events;
   }
   const qte = battle.qte;
-  const enemy = getActiveEnemy(battle);
+  const attacker = getAttackerEnemy(battle);
   const pStats = getEffectivePlayerCombatStats(player, battle);
   const weatherFx = getWeatherCombatEffect(battle.zone);
   const insideZone =
@@ -1149,7 +1789,6 @@ export function resolveQteInput(
 
   if (battle.phase === 'qte_dodge') {
     if (insideZone) {
-      // Successful Dodge -> Immediately trigger Counter-Attack QTE!
       events.sfx.push('dodge');
       events.vfx.push({
         target: 'player',
@@ -1188,7 +1827,7 @@ export function resolveQteInput(
         phase: 'counter',
         promptLabel: 'COUNTER ATTACK!',
         cursor: 0.1,
-        speed: 1.8 + battle.zone * 0.12,
+        speed: 1.8 + battle.zone * 0.1,
         direction: 1,
         zoneStart: 0.38,
         zoneEnd: 0.62,
@@ -1200,12 +1839,12 @@ export function resolveQteInput(
 
     // Failed Dodge -> Take full special move damage
     qte.active = false;
-    enemy.animState = 'attack';
-    enemy.animTimer = 0.4;
+    attacker.animState = 'attack';
+    attacker.animTimer = 0.4;
     applyDamageToPlayer(
       battle,
       player,
-      enemy.name,
+      attacker,
       qte.pendingMoveName,
       {
         damage: qte.pendingEnemyDamage,
@@ -1216,24 +1855,17 @@ export function resolveQteInput(
       },
       events
     );
-    if (player.currentHp <= 0) {
-      battle.phase = 'defeat';
-      events.sfx.push('defeat');
+    if (awardDefeatedEnemiesOnField(battle, player, events)) {
       return events;
     }
-    tickBuffsAndCooldowns(battle, player, events);
-    if (enemy.currentHp <= 0) {
-      handleEnemyDefeated(battle, player, enemy, events);
-      return events;
-    }
-    battle.turnCount += 1;
-    battle.phase = 'player_turn';
+    advanceEnemyTurnOrEndRound(battle, player, events);
     return events;
   }
 
-  // Counter-Attack QTE phase
+  // Counter-Attack QTE phase (hits attacker if alive, else active target)
+  const counterTarget = attacker.currentHp > 0 ? attacker : getActiveEnemy(battle);
   qte.active = false;
-  if (insideZone) {
+  if (insideZone && counterTarget) {
     battle.playerAnim = 'attack';
     battle.playerAnimTimer = 0.42;
     player.ultimateCharge = Math.min(100, player.ultimateCharge + 24);
@@ -1242,38 +1874,35 @@ export function resolveQteInput(
       ...pStats,
       critDmg: pStats.critDmg + comboBonuses.critDmgBonus,
     };
-    const counterRes = calculateDamage(boostedAttacker, enemy.stats, {
+    const eStats = getEffectiveEnemyCombatStats(counterTarget);
+    const shadowCounterMult = player.tier3Branch === 'shadowstrider' ? 1.35 : 1;
+    const vanguardStaggerMult = player.tier3Branch === 'vanguard' ? 1.3 : 1;
+    const counterRes = calculateDamage(boostedAttacker, eStats, {
       damageType: 'physical',
       powerMult: 1.65,
-      staggerPower: Math.round(48 * comboBonuses.staggerMult * weatherFx.staggerMult),
-      defenderIsStaggered: enemy.staggeredTurns > 0,
+      staggerPower: Math.round(48 * comboBonuses.staggerMult * weatherFx.staggerMult * vanguardStaggerMult),
+      defenderIsStaggered: counterTarget.staggeredTurns > 0,
       forceCrit: true,
       allowDodge: false,
+      damageMult: shadowCounterMult,
     });
     events.sfx.push('counter');
-    applyPlayerDamageResult(battle, player, enemy, 'Counter Strike', counterRes, events);
-    if (enemy.currentHp <= 0) {
-      handleEnemyDefeated(battle, player, enemy, events);
+    applyPlayerDamageResult(battle, player, counterTarget, 'Counter Strike', counterRes, events);
+    if (awardDefeatedEnemiesOnField(battle, player, events)) {
       return events;
     }
   } else {
     addBattleLog(battle, 'Counter-Attack missed the timing window.', 'miss');
   }
 
-  tickBuffsAndCooldowns(battle, player, events);
-  if (enemy.currentHp <= 0) {
-    handleEnemyDefeated(battle, player, enemy, events);
-    return events;
-  }
-  battle.turnCount += 1;
-  battle.phase = 'player_turn';
+  advanceEnemyTurnOrEndRound(battle, player, events);
   return events;
 }
 
 function applyDamageToPlayer(
   battle: BattleState,
   player: PlayerState,
-  attackerName: string,
+  attacker: CombatEnemy,
   moveName: string,
   res: {
     damage: number;
@@ -1284,6 +1913,7 @@ function applyDamageToPlayer(
   },
   events: CombatActionEvents
 ) {
+  const attackerName = attacker.name;
   if (res.isDodged) {
     events.sfx.push('dodge');
     events.vfx.push({ target: 'player', text: 'DODGE!', color: '#38bdf8' });
@@ -1327,28 +1957,52 @@ function applyDamageToPlayer(
     battle.playerAnimTimer = player.currentHp === 0 ? 0.7 : 0.35;
   }
 
-  // Passive Proc: Thorns reflection on Block / Guard (Sturdy Ribs / Immortal Bulwark)
-  if (
-    res.isBlocked &&
-    (player.unlockedSkillIds.includes('def_t1_plate') ||
-      player.unlockedSkillIds.includes('def_t2_bulwark'))
-  ) {
-    const enemy = getActiveEnemy(battle);
-    if (enemy && enemy.currentHp > 0) {
-      const pStats = getEffectivePlayerCombatStats(player, battle);
-      const mult = player.unlockedSkillIds.includes('def_t2_bulwark') ? 0.55 : 0.3;
-      const thornsDmg = Math.max(4, Math.round(pStats.def * mult));
-      enemy.currentHp = Math.max(0, enemy.currentHp - thornsDmg);
+  // Passive Procs on Block / Guard
+  if (res.isBlocked) {
+    const pStats = getEffectivePlayerCombatStats(player, battle);
+    if (player.unlockedSkillIds.includes('def_t2_riposte')) {
+      battle.comboCount += 1;
+      battle.comboFlashSeq += 1;
+      battle.maxComboCount = Math.max(battle.maxComboCount, battle.comboCount);
+      player.currentMp = Math.min(pStats.mp, player.currentMp + 10);
+      player.ultimateCharge = Math.min(100, player.ultimateCharge + 10);
       events.vfx.push({
-        target: 'enemy',
-        text: `THORNS -${thornsDmg}`,
-        color: '#94a3b8',
-        yOffset: 16,
-        burstColor: '#94a3b8',
-        burstCount: 8,
+        target: 'player',
+        text: 'PARRY RIPOSTE +1 COMBO',
+        color: '#facc15',
+        yOffset: -20,
       });
-      if (enemy.currentHp > 0) {
-        dealStaggerToEnemy(battle, enemy, 12, events);
+    }
+    if (player.tier3Branch === 'vanguard') {
+      const healAmt = Math.max(6, Math.round(pStats.hp * 0.06));
+      player.currentHp = Math.min(pStats.hp, player.currentHp + healAmt);
+      events.vfx.push({
+        target: 'player',
+        text: `BULWARK +${healAmt} HP`,
+        color: '#4ade80',
+        yOffset: -32,
+      });
+    }
+    if (
+      player.unlockedSkillIds.includes('def_t1_plate') ||
+      player.unlockedSkillIds.includes('def_t2_bulwark')
+    ) {
+      if (attacker && attacker.currentHp > 0) {
+        const mult = player.unlockedSkillIds.includes('def_t2_bulwark') ? 0.55 : 0.3;
+        const thornsDmg = Math.max(4, Math.round(pStats.def * mult));
+        attacker.currentHp = Math.max(0, attacker.currentHp - thornsDmg);
+        events.vfx.push({
+          target: 'enemy',
+          text: `THORNS -${thornsDmg}`,
+          color: '#94a3b8',
+          yOffset: 16,
+          burstColor: '#94a3b8',
+          burstCount: 8,
+        });
+        if (attacker.currentHp > 0) {
+          dealStaggerToEnemy(battle, attacker, 12, events);
+          checkBossPhaseTransition(battle, attacker, events);
+        }
       }
     }
   }

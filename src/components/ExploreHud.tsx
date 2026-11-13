@@ -1,4 +1,20 @@
-import { AlertTriangle, Backpack, CloudRain, Flame, GitBranch, Pause, Snowflake, Sun, Volume2, VolumeX, Wind, Zap } from 'lucide-react';
+import {
+  AlertTriangle,
+  Backpack,
+  CloudRain,
+  Flame,
+  GitBranch,
+  Pause,
+  Snowflake,
+  Sparkles,
+  Sun,
+  Swords,
+  Volume2,
+  VolumeX,
+  Wind,
+  Zap,
+} from 'lucide-react';
+import { PET_CATALOG } from '../game/data';
 import { computePlayerStats, getXpToNextLevel } from '../game/rpgLogic';
 import { PlayerState, StageDefinition, WorldEntity } from '../game/types';
 import { getWeatherCombatEffect, getZoneWeatherProfile } from '../game/weather';
@@ -13,6 +29,7 @@ interface ExploreHudProps {
   onPause: () => void;
   onOpenInventory: () => void;
   onOpenSkillTree: () => void;
+  onOpenArena?: () => void;
   onInteract: () => void;
   onSelectZone: (zone: number) => void;
 }
@@ -27,6 +44,7 @@ export function ExploreHud({
   onPause,
   onOpenInventory,
   onOpenSkillTree,
+  onOpenArena,
   onInteract,
   onSelectZone,
 }: ExploreHudProps) {
@@ -37,6 +55,9 @@ export function ExploreHud({
   const hpPct = Math.max(0, Math.min(100, (player.currentHp / stats.hp) * 100));
   const mpPct = Math.max(0, Math.min(100, (player.currentMp / stats.mp) * 100));
   const xpPct = Math.max(0, Math.min(100, (player.xp / xpNeeded) * 100));
+  const equippedPet = player.equippedPetId
+    ? PET_CATALOG.find((p) => p.id === player.equippedPetId)
+    : undefined;
 
   const interactLabel =
     nearbyInteractable?.kind === 'fireplace'
@@ -45,6 +66,8 @@ export function ExploreHud({
       ? 'Open Shop & Blacksmith [E]'
       : nearbyInteractable?.kind === 'chest'
       ? 'Open Chest [E]'
+      : nearbyInteractable?.kind === 'shrine'
+      ? 'Activate Blessing Shrine [E]'
       : nearbyInteractable?.kind === 'portal'
       ? 'Enter Next Zone [E]'
       : null;
@@ -62,8 +85,8 @@ export function ExploreHud({
     <div className="fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-3 md:p-4">
       {/* Top Perimeter Clusters */}
       <div className="flex items-start justify-between gap-4">
-        {/* Top-Left: Compact Player Vitality & Zone */}
-        <div className="pointer-events-auto bg-[#1b162b]/90 border-2 border-[#4b3f6b] px-3 py-2 shadow-[0_3px_0_#0e0b16] min-w-[230px]">
+        {/* Top-Left: Compact Player Vitality, Pet & Zone */}
+        <div className="pointer-events-auto bg-[#1b162b]/90 border-2 border-[#4b3f6b] px-3 py-2 shadow-[0_3px_0_#0e0b16] min-w-[238px]">
           <div className="flex items-center justify-between gap-3 mb-1.5">
             <span className="font-pixel text-xs text-[#f7c948]">
               {player.name} · {player.className} Lv.{player.level}
@@ -81,7 +104,7 @@ export function ExploreHud({
                 {Math.round(player.currentHp)}/{stats.hp}
               </span>
             </div>
-            <div className="h-2 bg-[#0e0b16] border border-[#4b3f6b]">
+            <div className="h-2.5 bg-[#0e0b16] border border-[#4b3f6b]">
               <div
                 className="h-full bg-[#ef4444] transition-all duration-150"
                 style={{ width: `${hpPct}%` }}
@@ -118,13 +141,22 @@ export function ExploreHud({
               </div>
             </div>
           </div>
+
+          {equippedPet && (
+            <div className="mt-1.5 pt-1 border-t border-[#4b3f6b]/60 flex items-center justify-between text-[10px] font-mono-num">
+              <span className="text-[#94a3b8]">Familiar:</span>
+              <span className="font-semibold" style={{ color: equippedPet.accent }}>
+                {equippedPet.name} ({equippedPet.assistName})
+              </span>
+            </div>
+          )}
         </div>
 
-        {/* Top-Center: Stage Banner & Quick Zone Selector */}
+        {/* Top-Center: Stage Banner & Quick Zone Selector (Z1..Z10) */}
         <div className="pointer-events-auto hidden md:flex flex-col items-center bg-[#1b162b]/90 border-2 border-[#4b3f6b] px-4 py-1.5 shadow-[0_3px_0_#0e0b16]">
           <div className="font-pixel text-xs text-[#f4efe6]">{stage.name}</div>
-          <div className="flex items-center gap-1 mt-1">
-            {[1, 2, 3, 4, 5, 6, 7, 8].map((z) => (
+          <div className="flex items-center gap-1 mt-1 flex-wrap justify-center">
+            {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((z) => (
               <button
                 key={z}
                 type="button"
@@ -133,6 +165,8 @@ export function ExploreHud({
                 className={`font-pixel text-[10px] px-1.5 py-0.5 border cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed ${
                   stage.zone === z
                     ? 'bg-[#f7c948] text-[#0e0b16] border-[#0e0b16]'
+                    : z >= 9
+                    ? 'bg-[#1e1b4b] text-[#7dd3fc] border-[#38bdf8]/60 hover:bg-[#312e81]'
                     : 'bg-[#2d2544] text-[#e6d8bd] border-[#4b3f6b] hover:bg-[#3d335c]'
                 }`}
               >
@@ -153,8 +187,10 @@ export function ExploreHud({
               <Flame className="w-3 h-3 shrink-0" style={{ color: weatherFx.accent }} />
             ) : weatherProfile.kind === 'leaves' ? (
               <Wind className="w-3 h-3 shrink-0" style={{ color: weatherFx.accent }} />
-            ) : weatherProfile.kind === 'arcane_ash' ? (
+            ) : weatherProfile.kind === 'arcane_ash' || weatherProfile.kind === 'void_rift' ? (
               <Zap className="w-3 h-3 shrink-0" style={{ color: weatherFx.accent }} />
+            ) : weatherProfile.kind === 'starfall' ? (
+              <Sparkles className="w-3 h-3 shrink-0" style={{ color: weatherFx.accent }} />
             ) : (
               <Sun className="w-3 h-3 shrink-0" style={{ color: weatherFx.accent }} />
             )}
@@ -165,6 +201,18 @@ export function ExploreHud({
 
         {/* Top-Right: Menu & Audio Utilities */}
         <div className="pointer-events-auto flex items-center gap-2">
+          {onOpenArena && player.highestZone >= 2 && (
+            <button
+              type="button"
+              data-testid="btn-arena-shortcut"
+              onClick={onOpenArena}
+              className="flex items-center gap-1.5 bg-[#3d1221]/95 border-2 border-[#fb7185] hover:border-[#facc15] px-3 py-2 font-pixel text-xs text-[#fecdd3] shadow-[0_3px_0_#0e0b16] cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <Swords className="w-4 h-4 text-[#fb7185]" />
+              <span>Arena</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={onOpenInventory}
@@ -262,8 +310,11 @@ export function ExploreHud({
 
           <div className="relative h-3 bg-[#0e0b16] border border-[#4b3f6b]">
             {stage.entities.map((ent) => {
-              if (ent.kind === 'gold' || ent.kind === 'material') return null;
+              if (ent.kind === 'gold' || ent.kind === 'material' || ent.kind === 'bounce_pad') {
+                return null;
+              }
               if (ent.kind === 'chest' && ent.opened) return null;
+              if (ent.kind === 'shrine' && ent.used) return null;
               if (ent.kind === 'enemy' && ent.defeated) return null;
 
               const leftPct = Math.max(1, Math.min(98, (ent.x / stage.width) * 100));
@@ -273,6 +324,11 @@ export function ExploreHud({
                 color = '#f28729';
               } else if (ent.kind === 'chest') {
                 color = '#facc15';
+              } else if (ent.kind === 'shrine') {
+                color = '#22d3ee';
+              } else if (ent.kind === 'hazard') {
+                color = '#f43f5e';
+                sizeCls = 'w-1 h-1 bottom-0';
               } else if (ent.kind === 'portal') {
                 color = bossDefeated ? '#4ade80' : '#4b3f6b';
                 sizeCls = 'w-2 h-2.5 top-0';
