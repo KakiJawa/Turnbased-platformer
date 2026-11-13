@@ -4,7 +4,7 @@ import { ExploreHud } from './components/ExploreHud';
 import { FireplaceTownModal } from './components/FireplaceTownModal';
 import { InventoryModal } from './components/InventoryModal';
 import { SkillTreeModal } from './components/SkillTreeModal';
-import { OutcomeModal, PauseModal } from './components/StatusModals';
+import { OutcomeModal, PauseModal, BattleVictoryModal, VictoryRecapData } from './components/StatusModals';
 import { TitleOverlay } from './components/TitleOverlay';
 import { audio } from './game/audio';
 import {
@@ -12,7 +12,6 @@ import {
   CombatActionEvents,
   createBattleState,
   executePlayerAction,
-  getActiveEnemy,
   getEquippedSkillsList,
   resolveQteInput,
   stepBattleTimeline,
@@ -26,18 +25,28 @@ import {
 } from './game/canvasRenderer';
 import { MATERIAL_META, SHOP_CONSUMABLES } from './game/data';
 import {
+  clearRunState,
+  getSavedRunSummary,
+  loadRunState,
+  saveRunState,
+} from './game/persistence';
+import {
   PlatformerPlayer,
   createPlatformerPlayer,
   stepPlatformer,
 } from './game/platformer';
 import {
   advanceToHeroClass,
+  bulkDisposeInventory,
   computePlayerStats,
   createInitialPlayer,
   enchantEquipment,
   generateEquipment,
+  loadSkillPreset,
   reforgeEquipment,
+  respecSkills,
   rollRarityForEnemy,
+  saveSkillPreset,
   spawnEnemyWave,
   toggleEquipSkill,
   unlockSkillNode,
@@ -67,6 +76,8 @@ export default function App() {
   const keysHeldRef = useRef<Set<string>>(new Set());
   const jumpJustPressedRef = useRef<boolean>(false);
   const activeModalRef = useRef<'none' | 'inventory' | 'skills' | 'town'>('none');
+  const victoryRecapRef = useRef<VictoryRecapData | null>(null);
+  const lastHudSyncXRef = useRef<number>(pPlayerRef.current.x);
 
   // Discrete React UI state synced only on events/turns
   const [mode, setMode] = useState<GameMode>('title');
@@ -75,12 +86,42 @@ export default function App() {
   >('none');
   const [townInitialTab, setTownInitialTab] = useState<'shop' | 'blacksmith'>('shop');
   const [inspectEnemyOpen, setInspectEnemyOpen] = useState(false);
+  const [battleItemsOpen, setBattleItemsOpen] = useState(false);
+  const [victoryRecap, setVictoryRecap] = useState<VictoryRecapData | null>(null);
+  const [savedSummary, setSavedSummary] = useState(() => getSavedRunSummary());
   const [muted, setMuted] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [, setUiTick] = useState(0);
 
   const syncUi = useCallback(() => {
     setUiTick((t) => t + 1);
+  }, []);
+
+  const persistCurrentRun = useCallback(() => {
+    const stage = stageRef.current;
+    saveRunState({
+      version: 1,
+      savedAt: Date.now(),
+      player: playerRef.current,
+      zone: stage.zone,
+      playerX: Math.round(pPlayerRef.current.x),
+      defeatedEntityIds: stage.entities
+        .filter((e) => e.kind === 'enemy' && e.defeated)
+        .map((e) => e.id),
+      openedChestIds: stage.entities
+        .filter((e) => e.kind === 'chest' && e.opened)
+        .map((e) => e.id),
+      collectedPickupIds: stage.entities
+        .filter((e) => (e.kind === 'gold' || e.kind === 'material') && e.collected)
+        .map((e) => e.id),
+    });
+    setSavedSummary(getSavedRunSummary());
+  }, []);
+
+  const dismissVictoryRecap = useCallback(() => {
+    victoryRecapRef.current = null;
+    setVictoryRecap(null);
+    audio.playMenuBlip();
   }, []);
 
   const showToast = useCallback((msg: string) => {
@@ -168,17 +209,66 @@ export default function App() {
   const startNewRun = useCallback(() => {
     audio.unlock();
     audio.playMenuBlip();
+    clearRunState();
     playerRef.current = createInitialPlayer();
     stageRef.current = buildStage(1);
     pPlayerRef.current = createPlatformerPlayer();
+    lastHudSyncXRef.current = pPlayerRef.current.x;
     battleRef.current = null;
     nearbyRef.current = null;
+    victoryRecapRef.current = null;
+    setVictoryRecap(null);
     keysHeldRef.current.clear();
     setInspectEnemyOpen(false);
+    setBattleItemsOpen(false);
     openModal('none');
     updateMode('explore');
+    persistCurrentRun();
     syncUi();
-  }, [openModal, syncUi, updateMode]);
+  }, [openModal, persistCurrentRun, syncUi, updateMode]);
+
+  const continueSavedRun = useCallback(() => {
+    const saved = loadRunState();
+    if (!saved) {
+      startNewRun();
+      return;
+    }
+    audio.unlock();
+    audio.playMenuBlip();
+    const freshDefaults = createInitialPlayer();
+    playerRef.current = {
+      ...freshDefaults,
+      ...saved.player,
+      skillPresets: saved.player.skillPresets ?? freshDefaults.skillPresets,
+    };
+    const stage = buildStage(saved.zone);
+    const defeatedSet = new Set(saved.defeatedEntityIds);
+    const openedSet = new Set(saved.openedChestIds);
+    const collectedSet = new Set(saved.collectedPickupIds);
+    for (const ent of stage.entities) {
+      if (ent.kind === 'enemy' && defeatedSet.has(ent.id)) ent.defeated = true;
+      if (ent.kind === 'chest' && openedSet.has(ent.id)) ent.opened = true;
+      if ((ent.kind === 'gold' || ent.kind === 'material') && collectedSet.has(ent.id)) {
+        ent.collected = true;
+      }
+    }
+    stageRef.current = stage;
+    const pp = createPlatformerPlayer();
+    pp.x = Math.max(24, Math.min(stage.width - 24, saved.playerX || 80));
+    pPlayerRef.current = pp;
+    lastHudSyncXRef.current = pp.x;
+    battleRef.current = null;
+    nearbyRef.current = null;
+    victoryRecapRef.current = null;
+    setVictoryRecap(null);
+    keysHeldRef.current.clear();
+    setInspectEnemyOpen(false);
+    setBattleItemsOpen(false);
+    openModal('none');
+    updateMode('explore');
+    showToast(`Resumed Zone ${stage.zone}: ${stage.name}`);
+    syncUi();
+  }, [openModal, showToast, startNewRun, syncUi, updateMode]);
 
   const startBattleFromWorldEntity = useCallback(
     (ent: WorldEntity) => {
@@ -194,6 +284,7 @@ export default function App() {
       battleRef.current = createBattleState(stage.zone, rarity, ent.id, wave);
       keysHeldRef.current.clear();
       setInspectEnemyOpen(false);
+      setBattleItemsOpen(false);
       updateMode('battle');
       syncUi();
     },
@@ -214,6 +305,7 @@ export default function App() {
       showToast('Rested at Fireplace! HP, MP & Stagger restored.');
       setTownInitialTab('shop');
       openModal('town');
+      persistCurrentRun();
       syncUi();
       return;
     }
@@ -238,6 +330,7 @@ export default function App() {
       vfxRef.current.spawnBurst(ent.x, ent.y - 10, 18, '#f7c948');
       vfxRef.current.spawnPopup(ent.x, ent.y - 24, `+${goldGain}G & ${gear.name}!`, '#f7c948');
       showToast(`Chest opened: +${goldGain}G & ${gear.name} (${rarity})!`);
+      persistCurrentRun();
       syncUi();
       return;
     }
@@ -258,12 +351,14 @@ export default function App() {
         );
         stageRef.current = buildStage(nextZone);
         pPlayerRef.current = createPlatformerPlayer();
+        lastHudSyncXRef.current = pPlayerRef.current.x;
         audio.playLevelUp();
         showToast(`Entered Zone ${nextZone}: ${stageRef.current.name}!`);
+        persistCurrentRun();
         syncUi();
       }
     }
-  }, [openModal, showToast, syncUi]);
+  }, [openModal, persistCurrentRun, showToast, syncUi]);
 
   const handleBattleAction = useCallback(
     (
@@ -273,10 +368,14 @@ export default function App() {
         | { kind: 'skill'; skillId: string }
         | { kind: 'ultimate' }
         | { kind: 'consumable'; itemId: string }
+        | { kind: 'finisher'; mode: 'burst' | 'execute' }
     ) => {
       const battle = battleRef.current;
       if (!battle || battle.phase !== 'player_turn') return;
       audio.unlock();
+      if (action.kind !== 'consumable') {
+        setBattleItemsOpen(false);
+      }
       const events = executePlayerAction(battle, playerRef.current, action);
       applyCombatEvents(events);
       syncUi();
@@ -313,7 +412,11 @@ export default function App() {
       if (modeRef.current === 'title') {
         if (code === 'Enter' || code === 'Space') {
           e.preventDefault();
-          startNewRun();
+          if (loadRunState()) {
+            continueSavedRun();
+          } else {
+            startNewRun();
+          }
         }
         return;
       }
@@ -322,6 +425,14 @@ export default function App() {
         const nextMuted = !audio.isMuted();
         audio.setMuted(nextMuted);
         setMuted(nextMuted);
+        return;
+      }
+
+      if (victoryRecapRef.current) {
+        if (code === 'Space' || code === 'Enter' || code === 'Escape') {
+          e.preventDefault();
+          dismissVictoryRecap();
+        }
         return;
       }
 
@@ -386,6 +497,9 @@ export default function App() {
           if (code === 'KeyQ') handleBattleAction({ kind: 'attack' });
           else if (code === 'KeyG') handleBattleAction({ kind: 'guard' });
           else if (code === 'KeyU') handleBattleAction({ kind: 'ultimate' });
+          else if (code === 'KeyF') setBattleItemsOpen((v) => !v);
+          else if (code === 'KeyX') handleBattleAction({ kind: 'finisher', mode: 'execute' });
+          else if (code === 'KeyC') handleBattleAction({ kind: 'finisher', mode: 'burst' });
           else if (code.startsWith('Digit')) {
             const idx = Number(code.replace('Digit', '')) - 1;
             const equipped = getEquippedSkillsList(playerRef.current);
@@ -416,6 +530,8 @@ export default function App() {
       document.removeEventListener('visibilitychange', clearHeld);
     };
   }, [
+    continueSavedRun,
+    dismissVictoryRecap,
     handleBattleAction,
     handleInteract,
     handleQteTrigger,
@@ -442,7 +558,11 @@ export default function App() {
 
       const curMode = modeRef.current;
 
-      if (curMode === 'explore' && activeModalRef.current === 'none') {
+      if (
+        curMode === 'explore' &&
+        activeModalRef.current === 'none' &&
+        !victoryRecapRef.current
+      ) {
         const held = keysHeldRef.current;
         const left = held.has('ArrowLeft') || held.has('KeyA');
         const right = held.has('ArrowRight') || held.has('KeyD');
@@ -458,6 +578,8 @@ export default function App() {
           simDt
         );
 
+        let movedEnough =
+          Math.abs(pPlayerRef.current.x - lastHudSyncXRef.current) >= 18;
         if (stepRes.jumped) {
           audio.playJump();
         }
@@ -470,7 +592,8 @@ export default function App() {
             `+${stepRes.collectedGold}G`,
             '#f7c948'
           );
-          syncUi();
+          persistCurrentRun();
+          movedEnough = true;
         }
         if (stepRes.collectedMaterial) {
           const { id, amount } = stepRes.collectedMaterial;
@@ -482,10 +605,15 @@ export default function App() {
             `+${amount} ${MATERIAL_META[id].name}`,
             MATERIAL_META[id].color
           );
-          syncUi();
+          persistCurrentRun();
+          movedEnough = true;
         }
         if (nearbyRef.current?.id !== stepRes.nearbyInteractable?.id) {
           nearbyRef.current = stepRes.nearbyInteractable;
+          movedEnough = true;
+        }
+        if (movedEnough) {
+          lastHudSyncXRef.current = pPlayerRef.current.x;
           syncUi();
         }
         if (stepRes.triggeredEnemy) {
@@ -511,24 +639,37 @@ export default function App() {
             stageRef.current.zone === 8 && battle.encounterRarity === 'boss';
 
           if (isFinalBoss) {
+            clearRunState();
+            setSavedSummary(null);
             battleRef.current = null;
             updateMode('victory');
             syncUi();
           } else {
-            const rewardSummary = [
-              `+${rewards.xp} XP`,
-              `+${rewards.gold}G`,
-              rewards.items.length > 0 ? `${rewards.items[0].name}!` : '',
-            ]
-              .filter(Boolean)
-              .join(' · ');
-            showToast(`Victory! ${rewardSummary}`);
+            const recap: VictoryRecapData = {
+              zone: battle.zone,
+              enemyName: worldEnt?.enemyName ?? battle.wave[0]?.name ?? 'Monsters',
+              turnCount: battle.turnCount,
+              xp: rewards.xp,
+              gold: rewards.gold,
+              materials: rewards.materials,
+              items: rewards.items,
+              levelsGained: rewards.levelsGained,
+              maxComboCount: battle.maxComboCount,
+              maxComboDamage: battle.maxComboDamage,
+            };
+            victoryRecapRef.current = recap;
+            setVictoryRecap(recap);
             battleRef.current = null;
+            setBattleItemsOpen(false);
             updateMode('explore');
+            persistCurrentRun();
             syncUi();
           }
         } else if (battle.phase === 'defeat') {
+          clearRunState();
+          setSavedSummary(null);
           battleRef.current = null;
+          setBattleItemsOpen(false);
           updateMode('gameover');
           syncUi();
         } else if (
@@ -571,7 +712,7 @@ export default function App() {
 
     rafId = window.requestAnimationFrame(frame);
     return () => window.cancelAnimationFrame(rafId);
-  }, [applyCombatEvents, showToast, startBattleFromWorldEntity, syncUi, updateMode]);
+  }, [applyCombatEvents, persistCurrentRun, startBattleFromWorldEntity, syncUi, updateMode]);
 
   // Click Enemy on Canvas to Open Full Enemy Stat Inspector
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -617,13 +758,20 @@ export default function App() {
       )}
 
       {/* Title Screen */}
-      {mode === 'title' && <TitleOverlay onStart={startNewRun} />}
+      {mode === 'title' && (
+        <TitleOverlay
+          savedSummary={savedSummary}
+          onContinue={continueSavedRun}
+          onStart={startNewRun}
+        />
+      )}
 
       {/* Explore HUD */}
       {mode === 'explore' && (
         <ExploreHud
           player={player}
           stage={stage}
+          playerX={pPlayerRef.current.x}
           nearbyInteractable={nearbyRef.current}
           muted={muted}
           onToggleMute={() => {
@@ -638,9 +786,11 @@ export default function App() {
           onSelectZone={(z) => {
             stageRef.current = buildStage(z);
             pPlayerRef.current = createPlatformerPlayer();
+            lastHudSyncXRef.current = pPlayerRef.current.x;
             nearbyRef.current = null;
             audio.playMenuBlip();
             showToast(`Traveled to Zone ${z}: ${stageRef.current.name}`);
+            persistCurrentRun();
             syncUi();
           }}
         />
@@ -652,6 +802,7 @@ export default function App() {
           player={player}
           battle={battle}
           inspectEnemyOpen={inspectEnemyOpen}
+          showItems={battleItemsOpen}
           muted={muted}
           onToggleMute={() => {
             const next = !audio.isMuted();
@@ -659,9 +810,15 @@ export default function App() {
             setMuted(next);
           }}
           onToggleInspectEnemy={(open) => setInspectEnemyOpen(open)}
+          onToggleShowItems={() => setBattleItemsOpen((v) => !v)}
           onAction={handleBattleAction}
           onQteTrigger={handleQteTrigger}
         />
+      )}
+
+      {/* Battle Victory Recap Banner */}
+      {mode === 'explore' && victoryRecap && activeModal === 'none' && (
+        <BattleVictoryModal recap={victoryRecap} onContinue={dismissVictoryRecap} />
       )}
 
       {/* Inventory & Mid-Stage Equipment Modal */}
@@ -681,6 +838,7 @@ export default function App() {
             player.currentHp = Math.min(player.currentHp, stats.hp);
             player.currentMp = Math.min(player.currentMp, stats.mp);
             audio.playMenuBlip();
+            persistCurrentRun();
             syncUi();
           }}
           onSellItem={(itemId) => {
@@ -690,6 +848,24 @@ export default function App() {
             player.gold += item.sellValue;
             player.inventory.splice(idx, 1);
             audio.playCoin();
+            persistCurrentRun();
+            syncUi();
+          }}
+          onBulkDispose={(maxRarity, bulkMode) => {
+            const res = bulkDisposeInventory(playerRef.current, maxRarity, bulkMode);
+            if (res.count === 0) return;
+            playerRef.current = res.player;
+            if (bulkMode === 'sell') {
+              audio.playCoin();
+              showToast(`Bulk sold ${res.count} items for +${res.goldGained}G!`);
+            } else {
+              audio.playForge();
+              const matsStr = Object.entries(res.materialsGained)
+                .map(([id, amt]) => `+${amt} ${MATERIAL_META[id as MaterialId].name}`)
+                .join(', ');
+              showToast(`Salvaged ${res.count} items (${matsStr})!`);
+            }
+            persistCurrentRun();
             syncUi();
           }}
         />
@@ -703,17 +879,46 @@ export default function App() {
           onUnlockSkill={(skillId) => {
             playerRef.current = unlockSkillNode(playerRef.current, skillId);
             audio.playLevelUp();
+            persistCurrentRun();
             syncUi();
           }}
           onToggleEquipSkill={(skillId) => {
             playerRef.current = toggleEquipSkill(playerRef.current, skillId);
             audio.playMenuBlip();
+            persistCurrentRun();
             syncUi();
           }}
           onAdvanceClass={() => {
             playerRef.current = advanceToHeroClass(playerRef.current);
             audio.playVictory();
             showToast('Class Advanced to Vanguard Hero (Tier 2)!');
+            persistCurrentRun();
+            syncUi();
+          }}
+          onRespec={() => {
+            const res = respecSkills(playerRef.current);
+            if (!res.success) {
+              return { ok: false, msg: res.reason ?? 'Cannot respec.' };
+            }
+            playerRef.current = res.player;
+            audio.playMenuBlip();
+            persistCurrentRun();
+            syncUi();
+            return {
+              ok: true,
+              msg: `Skill Tree reset! Refunded ${res.refundedPoints} Skill Points.`,
+            };
+          }}
+          onSavePreset={(slotIndex) => {
+            playerRef.current = saveSkillPreset(playerRef.current, slotIndex);
+            audio.playMenuBlip();
+            persistCurrentRun();
+            syncUi();
+          }}
+          onLoadPreset={(slotIndex) => {
+            playerRef.current = loadSkillPreset(playerRef.current, slotIndex);
+            audio.playMenuBlip();
+            persistCurrentRun();
             syncUi();
           }}
         />
@@ -731,6 +936,7 @@ export default function App() {
             playerRef.current.currentMp = stats.mp;
             playerRef.current.currentStagger = playerRef.current.maxStagger;
             audio.playHeal();
+            persistCurrentRun();
             syncUi();
           }}
           onBuyConsumable={(cid) => {
@@ -741,6 +947,7 @@ export default function App() {
             if (existing) existing.quantity += 1;
             else player.consumables.push({ ...tpl, quantity: 1 });
             audio.playCoin();
+            persistCurrentRun();
             syncUi();
           }}
           onBuyStarterGear={(slot, name, price) => {
@@ -748,6 +955,7 @@ export default function App() {
             player.gold -= price;
             player.inventory.push(generateEquipment(slot, 'common', 1, name));
             audio.playCoin();
+            persistCurrentRun();
             syncUi();
           }}
           onBuyMaterial={(mId) => {
@@ -756,6 +964,7 @@ export default function App() {
             player.gold -= price;
             player.materials[mId] += 1;
             audio.playCoin();
+            persistCurrentRun();
             syncUi();
           }}
           onEnchantItem={(itemId, equippedSlot) => {
@@ -774,6 +983,7 @@ export default function App() {
               if (idx !== -1) player.inventory[idx] = res.item;
             }
             audio.playForge();
+            persistCurrentRun();
             syncUi();
             return { ok: true, msg: `Enchanted ${res.item.name} to +${res.item.level}!` };
           }}
@@ -793,6 +1003,7 @@ export default function App() {
               if (idx !== -1) player.inventory[idx] = res.item;
             }
             audio.playForge();
+            persistCurrentRun();
             syncUi();
             return { ok: true, msg: `Reforged ${res.item.name} affixes!` };
           }}
@@ -805,6 +1016,9 @@ export default function App() {
           onResume={() => updateMode(battleRef.current ? 'battle' : 'explore')}
           onRestart={startNewRun}
           onQuitToTitle={() => {
+            if (!battleRef.current) {
+              persistCurrentRun();
+            }
             battleRef.current = null;
             openModal('none');
             updateMode('title');

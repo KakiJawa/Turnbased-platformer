@@ -1,5 +1,126 @@
-import { Crown, RotateCcw, Skull } from 'lucide-react';
-import { PlayerState } from '../game/types';
+import { Crown, Flame, RotateCcw, Skull, Sparkles } from 'lucide-react';
+import { MATERIAL_META } from '../game/data';
+import { RARITY_META } from '../game/palette';
+import { EquipmentItem, MaterialId, PlayerState } from '../game/types';
+
+export interface VictoryRecapData {
+  zone: number;
+  enemyName: string;
+  turnCount: number;
+  xp: number;
+  gold: number;
+  materials: Partial<Record<MaterialId, number>>;
+  items: EquipmentItem[];
+  levelsGained: number;
+  maxComboCount: number;
+  maxComboDamage: number;
+}
+
+interface BattleVictoryModalProps {
+  recap: VictoryRecapData;
+  onContinue: () => void;
+}
+
+export function BattleVictoryModal({ recap, onContinue }: BattleVictoryModalProps) {
+  const matEntries = (Object.entries(recap.materials) as [MaterialId, number][]).filter(
+    ([, amt]) => amt > 0
+  );
+
+  return (
+    <div className="fixed inset-0 z-30 bg-black/65 flex items-center justify-center p-4">
+      <div
+        data-testid="victory-recap"
+        className="bg-[#1b162b] border-4 border-[#f7c948] shadow-[0_8px_0_#0e0b16] p-5 w-full max-w-md animate-juicy-pop"
+      >
+        <div className="flex items-center justify-between border-b-2 border-[#4b3f6b] pb-2 mb-3">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-[#f7c948]" />
+            <h2 className="font-pixel text-base text-[#f7c948]">VICTORY!</h2>
+          </div>
+          {recap.levelsGained > 0 && (
+            <span className="font-pixel text-[11px] px-2 py-0.5 bg-[#4ade80] text-[#0e0b16] border border-[#0e0b16]">
+              +{recap.levelsGained} LEVEL UP!
+            </span>
+          )}
+        </div>
+
+        <p className="text-xs text-[#cbd5e1] mb-3">
+          Defeated <span className="text-[#f4efe6] font-semibold">{recap.enemyName}</span> in{' '}
+          <span className="font-mono-num text-[#f7c948]">{recap.turnCount} turns</span> (Zone {recap.zone}).
+        </p>
+
+        {/* Combo & Loot Summary Grid */}
+        <div className="grid grid-cols-2 gap-2 mb-3 text-xs font-mono-num">
+          <div className="bg-[#0e0b16] border border-[#4b3f6b] p-2">
+            <div className="text-[#94a3b8] text-[10px]">BEST COMBO</div>
+            <div className="font-bold text-[#fb923c] flex items-center gap-1 mt-0.5">
+              <Flame className="w-3.5 h-3.5" />
+              <span>
+                {recap.maxComboCount} HIT{recap.maxComboCount === 1 ? '' : 'S'}
+              </span>
+            </div>
+          </div>
+          <div className="bg-[#0e0b16] border border-[#4b3f6b] p-2">
+            <div className="text-[#94a3b8] text-[10px]">COMBO DMG</div>
+            <div className="font-bold text-[#c084fc] mt-0.5">
+              {recap.maxComboDamage.toLocaleString()} DMG
+            </div>
+          </div>
+          <div className="bg-[#0e0b16] border border-[#4b3f6b] p-2">
+            <div className="text-[#94a3b8] text-[10px]">XP GAINED</div>
+            <div className="font-bold text-[#d8b4fe] mt-0.5">+{recap.xp} XP</div>
+          </div>
+          <div className="bg-[#0e0b16] border border-[#4b3f6b] p-2">
+            <div className="text-[#94a3b8] text-[10px]">GOLD EARNED</div>
+            <div className="font-bold text-[#f7c948] mt-0.5">+{recap.gold} G</div>
+          </div>
+        </div>
+
+        {matEntries.length > 0 && (
+          <div className="bg-[#0e0b16] border border-[#4b3f6b] px-3 py-2 mb-3 text-xs font-mono-num flex flex-wrap gap-3">
+            {matEntries.map(([id, amt]) => (
+              <span key={id} style={{ color: MATERIAL_META[id].color }}>
+                +{amt} {MATERIAL_META[id].name}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {recap.items.length > 0 && (
+          <div className="mb-4 flex flex-col gap-1.5">
+            <div className="font-pixel text-[10px] text-[#e6d8bd]">LOOT DROPPED:</div>
+            {recap.items.map((item) => {
+              const rMeta = RARITY_META[item.rarity];
+              return (
+                <div
+                  key={item.id}
+                  className="px-2.5 py-1.5 border flex items-center justify-between text-xs"
+                  style={{ backgroundColor: rMeta.bg, borderColor: rMeta.border }}
+                >
+                  <span className="font-pixel text-[11px]" style={{ color: rMeta.color }}>
+                    {item.name}
+                  </span>
+                  <span className="font-mono-num text-[10px] uppercase text-[#e6d8bd]">
+                    {rMeta.label} · {item.slot}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <button
+          type="button"
+          data-testid="victory-continue"
+          onClick={onContinue}
+          className="w-full font-pixel text-xs py-2.5 bg-[#f7c948] text-[#0e0b16] border-2 border-[#0e0b16] shadow-[0_3px_0_#0e0b16] hover:bg-[#fde047] cursor-pointer"
+        >
+          CONTINUE [SPACE / ENTER]
+        </button>
+      </div>
+    </div>
+  );
+}
 
 interface PauseModalProps {
   onResume: () => void;

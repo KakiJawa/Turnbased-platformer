@@ -1,4 +1,5 @@
 import {
+  Crosshair,
   Eye,
   Flame,
   Heart,
@@ -11,9 +12,10 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { useState } from 'react';
 import {
   BattleState,
+  canUseComboFinisher,
+  canUseStaggerExecute,
   getActiveEnemy,
   getComboBonuses,
   getEquippedSkillsList,
@@ -27,9 +29,11 @@ interface BattleHudProps {
   player: PlayerState;
   battle: BattleState;
   inspectEnemyOpen: boolean;
+  showItems: boolean;
   muted: boolean;
   onToggleMute: () => void;
   onToggleInspectEnemy: (open: boolean) => void;
+  onToggleShowItems: () => void;
   onAction: (
     action:
       | { kind: 'attack' }
@@ -37,6 +41,7 @@ interface BattleHudProps {
       | { kind: 'skill'; skillId: string }
       | { kind: 'ultimate' }
       | { kind: 'consumable'; itemId: string }
+      | { kind: 'finisher'; mode: 'burst' | 'execute' }
   ) => void;
   onQteTrigger: () => void;
 }
@@ -59,14 +64,14 @@ export function BattleHud({
   player,
   battle,
   inspectEnemyOpen,
+  showItems,
   muted,
   onToggleMute,
   onToggleInspectEnemy,
+  onToggleShowItems,
   onAction,
   onQteTrigger,
 }: BattleHudProps) {
-  const [showItems, setShowItems] = useState(false);
-
   const enemy = getActiveEnemy(battle);
   const pStats = computePlayerStats(player, battle.playerBuffs);
   const equippedSkills = getEquippedSkillsList(player);
@@ -84,10 +89,29 @@ export function BattleHud({
     Math.min(100, (player.currentStagger / player.maxStagger) * 100)
   );
   const comboBonuses = getComboBonuses(battle.comboCount);
+  const finisherReady = canUseComboFinisher(battle);
+  const executeReady = canUseStaggerExecute(battle);
+
+  const activePassives: string[] = [];
+  if (player.unlockedSkillIds.includes('phy_t1_might') || player.unlockedSkillIds.includes('phy_t2_mastery')) {
+    activePassives.push('Crit Surge');
+  }
+  if (player.unlockedSkillIds.includes('mag_t1_focus') || player.unlockedSkillIds.includes('mag_t2_sage')) {
+    activePassives.push('Mana Flow');
+  }
+  if (player.unlockedSkillIds.includes('def_t1_plate') || player.unlockedSkillIds.includes('def_t2_bulwark')) {
+    activePassives.push('Thorns');
+  }
+  if (player.unlockedSkillIds.includes('spd_t1_step') || player.unlockedSkillIds.includes('spd_t2_phantom')) {
+    activePassives.push('Shadow Step');
+  }
+  if (player.unlockedSkillIds.includes('all_t1_seed') || player.unlockedSkillIds.includes('all_t2_awakening')) {
+    activePassives.push('Harvest');
+  }
 
   return (
     <div className="fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-3 md:p-4">
-      {/* Top Row: Player Small Box (Left) + Wave/Inspect & Mute (Right) */}
+      {/* Top Row: Player Small Box (Left) + Combo Counter (Center) + Wave/Inspect & Mute (Right) */}
       <div className="flex items-start justify-between gap-4">
         {/* Small Player Box: Name, HP, small MP, Ultimate, Stagger, Buffs/Debuffs */}
         <div className="pointer-events-auto bg-[#1b162b]/95 border-2 border-[#f7c948] px-3 py-2.5 shadow-[0_4px_0_#0e0b16] w-[256px]">
@@ -189,6 +213,19 @@ export function BattleHud({
               ))
             )}
           </div>
+
+          {activePassives.length > 0 && (
+            <div className="mt-1 pt-1 border-t border-[#4b3f6b]/40 flex flex-wrap gap-1">
+              {activePassives.map((p) => (
+                <span
+                  key={p}
+                  className="text-[9px] font-mono-num px-1 py-0.2 bg-[#0e0b16] border border-[#38bdf8]/40 text-[#7dd3fc]"
+                >
+                  {p}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Top-Center: Juicy 16-Bit Combo Counter & Total Combo Damage */}
@@ -386,9 +423,45 @@ export function BattleHud({
 
       {/* Bottom-Center Juicy Battle Action Deck */}
       <div className="pointer-events-auto self-center w-full max-w-4xl flex flex-col items-center gap-2">
-        {/* Pop-up Consumables Tray */}
+        {/* Combo Finisher & Stagger Execute Bar (Appears at 3+ Combo) */}
+        {battle.comboCount >= 3 && (
+          <div className="flex flex-wrap items-center justify-center gap-2 animate-juicy-pop">
+            <button
+              type="button"
+              data-testid="btn-stagger-execute"
+              disabled={!isPlayerTurn || !executeReady}
+              onClick={() => onAction({ kind: 'finisher', mode: 'execute' })}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-b from-[#ea580c] to-[#9a3412] border-2 border-[#fdba74] shadow-[0_3px_0_#0e0b16] hover:-translate-y-0.5 active:translate-y-0.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Crosshair className="w-3.5 h-3.5 text-[#ffedd5]" />
+              <span className="font-pixel text-[11px] text-[#fff7ed]">
+                [X] Stagger Execute (3+ Hits)
+              </span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="btn-combo-finisher"
+              disabled={!isPlayerTurn || !finisherReady}
+              onClick={() => onAction({ kind: 'finisher', mode: 'burst' })}
+              className={`flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-b from-[#9333ea] to-[#581c87] border-2 border-[#e879f9] shadow-[0_3px_0_#0e0b16] hover:-translate-y-0.5 active:translate-y-0.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                finisherReady && isPlayerTurn ? 'animate-ult-ready' : ''
+              }`}
+            >
+              <Flame className="w-3.5 h-3.5 text-[#f5d0fe]" />
+              <span className="font-pixel text-[11px] text-[#fae8ff]">
+                [C] Combo Finisher {finisherReady ? 'READY!' : `(${battle.comboCount}/5)`}
+              </span>
+            </button>
+          </div>
+        )}
+
+        {/* Pop-up Consumables Hotbar Tray */}
         {showItems && (
-          <div className="bg-[#1b162b] border-2 border-[#4ade80] p-2.5 shadow-[0_4px_0_#0e0b16] flex flex-wrap items-center justify-center gap-2 animate-juicy-pop">
+          <div
+            data-testid="consumable-hotbar"
+            className="bg-[#1b162b] border-2 border-[#4ade80] p-2.5 shadow-[0_4px_0_#0e0b16] flex flex-wrap items-center justify-center gap-2 animate-juicy-pop"
+          >
             {consumables.length === 0 ? (
               <span className="text-xs text-[#94a3b8] px-3 py-1">
                 No consumables left! Visit the Shop near a Fireplace.
@@ -400,7 +473,7 @@ export function BattleHud({
                   type="button"
                   disabled={!isPlayerTurn}
                   onClick={() => {
-                    setShowItems(false);
+                    onToggleShowItems();
                     onAction({ kind: 'consumable', itemId: item.id });
                   }}
                   className="px-3 py-1.5 bg-[#142e22] hover:bg-[#1d4231] border-2 border-[#4ade80] text-left cursor-pointer disabled:opacity-40 transition-transform hover:-translate-y-0.5 active:scale-95"
@@ -503,7 +576,7 @@ export function BattleHud({
           <button
             type="button"
             disabled={!isPlayerTurn}
-            onClick={() => setShowItems((v) => !v)}
+            onClick={onToggleShowItems}
             className="flex items-center gap-1.5 px-3 py-2.5 bg-[#142e22] hover:bg-[#1e4432] border-2 border-[#4ade80] shadow-[0_4px_0_#0e0b16] hover:-translate-y-0.5 active:translate-y-0.5 transition-all cursor-pointer disabled:opacity-45"
           >
             <Package className="w-4 h-4 text-[#86efac]" />

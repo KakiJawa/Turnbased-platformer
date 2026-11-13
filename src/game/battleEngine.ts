@@ -111,6 +111,15 @@ export function getComboBonuses(comboCount: number): ComboBonuses {
   };
 }
 
+export function canUseComboFinisher(battle: BattleState): boolean {
+  return battle.comboCount >= 5;
+}
+
+export function canUseStaggerExecute(battle: BattleState): boolean {
+  const enemy = getActiveEnemy(battle);
+  return battle.comboCount >= 3 && Boolean(enemy) && enemy.staggeredTurns === 0;
+}
+
 let logSeq = 1;
 
 export function createBattleState(
@@ -285,6 +294,7 @@ export function executePlayerAction(
     | { kind: 'skill'; skillId: string }
     | { kind: 'ultimate' }
     | { kind: 'consumable'; itemId: string }
+    | { kind: 'finisher'; mode: 'burst' | 'execute' }
 ): CombatActionEvents {
   const events: CombatActionEvents = { sfx: [], vfx: [] };
   if (battle.phase !== 'player_turn') return events;
@@ -404,7 +414,104 @@ export function executePlayerAction(
       staggerPower: Math.round(24 * comboBonuses.staggerMult),
       defenderIsStaggered: enemy.staggeredTurns > 0,
     });
-    applyPlayerDamageResult(battle, enemy, 'Basic Strike', res, events);
+    applyPlayerDamageResult(battle, player, enemy, 'Basic Strike', res, events);
+    finishPlayerTurn(battle, player, events);
+    return events;
+  }
+
+  if (action.kind === 'finisher') {
+    if (action.mode === 'burst') {
+      if (!canUseComboFinisher(battle)) return events;
+      const usedHits = battle.comboCount;
+      const usedDmg = battle.comboDamage;
+      battle.comboCount = 0;
+      battle.comboDamage = 0;
+      battle.playerAnim = 'attack';
+      battle.playerAnimTimer = 0.48;
+      player.ultimateCharge = Math.min(100, player.ultimateCharge + 18);
+
+      const finisherAttacker = {
+        ...pStats,
+        atk: Math.round(pStats.atk + usedDmg * 0.35),
+        critDmg: pStats.critDmg + usedHits * 12,
+      };
+      const res = calculateDamage(finisherAttacker, enemy.stats, {
+        damageType: 'physical',
+        powerMult: 1.55 + usedHits * 0.14,
+        staggerPower: 55 + usedHits * 6,
+        defenderIsStaggered: enemy.staggeredTurns > 0,
+        forceCrit: true,
+        allowDodge: false,
+      });
+
+      enemy.currentHp = Math.max(0, enemy.currentHp - res.damage);
+      enemy.animState = enemy.currentHp === 0 ? 'death' : 'hit';
+      enemy.animTimer = enemy.currentHp === 0 ? 0.65 : 0.42;
+      events.sfx.push('ultimate', 'crit');
+      events.vfx.push({
+        target: 'enemy',
+        text: `FINISHER ${res.damage}!`,
+        color: '#c084fc',
+        yOffset: 6,
+        burstColor: '#c084fc',
+        burstCount: 34,
+        hitstop: 0.1,
+        trauma: 0.9,
+        ringColor: '#facc15',
+        flashColor: '#c084fc',
+      });
+      addBattleLog(
+        battle,
+        `COMBO FINISHER (${usedHits}x Stack) obliterated ${enemy.name} for ${res.damage} CRIT!`,
+        'crit'
+      );
+      applyPassiveProcsOnHit(battle, player, pStats, res, events);
+      if (enemy.currentHp > 0) {
+        dealStaggerToEnemy(battle, enemy, res.staggerDamage, events);
+      }
+      finishPlayerTurn(battle, player, events);
+      return events;
+    }
+
+    // Stagger Execute: spends 3+ combo stack to deal 135% ATK and force instant Stagger Break
+    if (!canUseStaggerExecute(battle)) return events;
+    const usedHits = battle.comboCount;
+    battle.comboCount = 0;
+    battle.comboDamage = 0;
+    battle.playerAnim = 'attack';
+    battle.playerAnimTimer = 0.44;
+    player.ultimateCharge = Math.min(100, player.ultimateCharge + 16);
+
+    const res = calculateDamage(pStats, enemy.stats, {
+      damageType: 'physical',
+      powerMult: 1.35 + usedHits * 0.06,
+      staggerPower: enemy.currentStagger,
+      defenderIsStaggered: false,
+      allowDodge: false,
+    });
+    enemy.currentHp = Math.max(0, enemy.currentHp - res.damage);
+    enemy.animState = enemy.currentHp === 0 ? 'death' : 'hit';
+    enemy.animTimer = enemy.currentHp === 0 ? 0.65 : 0.38;
+    events.sfx.push('crit');
+    events.vfx.push({
+      target: 'enemy',
+      text: `EXECUTE ${res.damage}!`,
+      color: '#fb923c',
+      yOffset: 6,
+      burstColor: '#fb923c',
+      burstCount: 24,
+      hitstop: 0.08,
+      trauma: 0.72,
+    });
+    addBattleLog(
+      battle,
+      `STAGGER EXECUTE (${usedHits}x Stack) hit ${enemy.name} for ${res.damage} and shattered posture!`,
+      'stagger'
+    );
+    applyPassiveProcsOnHit(battle, player, pStats, res, events);
+    if (enemy.currentHp > 0) {
+      dealStaggerToEnemy(battle, enemy, Math.max(1, enemy.currentStagger), events);
+    }
     finishPlayerTurn(battle, player, events);
     return events;
   }
@@ -431,6 +538,23 @@ export function executePlayerAction(
       }
       battle.skillCooldowns[skill.id] = skill.cooldown ?? 1;
       player.ultimateCharge = Math.min(100, player.ultimateCharge + 22);
+
+      // Passive Proc: Mana Flow (Lantern Mind / Archmage Soul) refunds 20%-35% skill MP cost
+      if (
+        mpCost > 0 &&
+        (player.unlockedSkillIds.includes('mag_t1_focus') ||
+          player.unlockedSkillIds.includes('mag_t2_sage'))
+      ) {
+        const pct = player.unlockedSkillIds.includes('mag_t2_sage') ? 0.35 : 0.2;
+        const refund = Math.max(2, Math.round(mpCost * pct));
+        player.currentMp = Math.min(pStats.mp, player.currentMp + refund);
+        events.vfx.push({
+          target: 'player',
+          text: `MANA FLOW +${refund} MP`,
+          color: '#38bdf8',
+          yOffset: -20,
+        });
+      }
     }
 
     battle.playerAnim = 'attack';
@@ -506,6 +630,7 @@ export function executePlayerAction(
       });
       applyPlayerDamageResult(
         battle,
+        player,
         enemy,
         skill.name,
         res,
@@ -555,8 +680,55 @@ function dealStaggerToEnemy(
   }
 }
 
+function applyPassiveProcsOnHit(
+  battle: BattleState,
+  player: PlayerState,
+  pStats: ReturnType<typeof computePlayerStats>,
+  res: ReturnType<typeof calculateDamage>,
+  events: CombatActionEvents
+) {
+  if (res.isDodged) return;
+
+  // Passive Proc: Crit Surge (Farmhand Grit / Titan Edge)
+  if (
+    res.isCrit &&
+    (player.unlockedSkillIds.includes('phy_t1_might') ||
+      player.unlockedSkillIds.includes('phy_t2_mastery'))
+  ) {
+    const hasTitan = player.unlockedSkillIds.includes('phy_t2_mastery');
+    const ultGain = hasTitan ? 14 : 8;
+    player.ultimateCharge = Math.min(100, player.ultimateCharge + ultGain);
+    if (hasTitan) {
+      player.currentMp = Math.min(pStats.mp, player.currentMp + 8);
+    }
+    events.vfx.push({
+      target: 'player',
+      text: hasTitan ? `CRIT SURGE +${ultGain}% ULT +8 MP` : `CRIT SURGE +${ultGain}% ULT`,
+      color: '#facc15',
+      yOffset: -18,
+    });
+  }
+
+  // Passive Proc: Harvest Drain (Hearty Harvest / Heroic Awakening)
+  if (
+    player.unlockedSkillIds.includes('all_t1_seed') ||
+    player.unlockedSkillIds.includes('all_t2_awakening')
+  ) {
+    const pct = player.unlockedSkillIds.includes('all_t2_awakening') ? 0.07 : 0.04;
+    const healAmt = Math.max(3, Math.round(pStats.hp * pct));
+    player.currentHp = Math.min(pStats.hp, player.currentHp + healAmt);
+    events.vfx.push({
+      target: 'player',
+      text: `HARVEST +${healAmt} HP`,
+      color: '#4ade80',
+      yOffset: -34,
+    });
+  }
+}
+
 function applyPlayerDamageResult(
   battle: BattleState,
+  player: PlayerState,
   enemy: CombatEnemy,
   moveName: string,
   res: ReturnType<typeof calculateDamage>,
@@ -632,6 +804,9 @@ function applyPlayerDamageResult(
     }`,
     res.isCrit ? 'crit' : 'hit'
   );
+
+  const pStats = computePlayerStats(player, battle.playerBuffs);
+  applyPassiveProcsOnHit(battle, player, pStats, res, events);
 
   if (enemy.currentHp > 0) {
     dealStaggerToEnemy(battle, enemy, res.staggerDamage, events);
@@ -905,6 +1080,25 @@ export function resolveQteInput(
         color: '#38bdf8',
         ringColor: '#38bdf8',
       });
+      if (
+        player.unlockedSkillIds.includes('spd_t1_step') ||
+        player.unlockedSkillIds.includes('spd_t2_phantom')
+      ) {
+        player.ultimateCharge = Math.min(100, player.ultimateCharge + 12);
+        battle.playerBuffs = applyBuffToList(battle.playerBuffs, {
+          type: 'spd_up',
+          label: 'Shadow Step',
+          isDebuff: false,
+          turns: 2,
+          potency: 25,
+        });
+        events.vfx.push({
+          target: 'player',
+          text: 'SHADOW STEP +12% ULT',
+          color: '#facc15',
+          yOffset: -18,
+        });
+      }
       addBattleLog(
         battle,
         `Dodged ${qte.pendingMoveName}! Counter-Attack window open!`,
@@ -980,7 +1174,7 @@ export function resolveQteInput(
       allowDodge: false,
     });
     events.sfx.push('counter');
-    applyPlayerDamageResult(battle, enemy, 'Counter Strike', counterRes, events);
+    applyPlayerDamageResult(battle, player, enemy, 'Counter Strike', counterRes, events);
     if (enemy.currentHp <= 0) {
       handleEnemyDefeated(battle, player, enemy, events);
       return events;
@@ -1016,6 +1210,25 @@ function applyDamageToPlayer(
   if (res.isDodged) {
     events.sfx.push('dodge');
     events.vfx.push({ target: 'player', text: 'DODGE!', color: '#38bdf8' });
+    if (
+      player.unlockedSkillIds.includes('spd_t1_step') ||
+      player.unlockedSkillIds.includes('spd_t2_phantom')
+    ) {
+      player.ultimateCharge = Math.min(100, player.ultimateCharge + 12);
+      battle.playerBuffs = applyBuffToList(battle.playerBuffs, {
+        type: 'spd_up',
+        label: 'Shadow Step',
+        isDebuff: false,
+        turns: 2,
+        potency: 25,
+      });
+      events.vfx.push({
+        target: 'player',
+        text: 'SHADOW STEP +12% ULT',
+        color: '#facc15',
+        yOffset: -18,
+      });
+    }
     addBattleLog(battle, `${player.name} nimbly dodged ${attackerName}!`, 'info');
     return;
   }
@@ -1031,6 +1244,32 @@ function applyDamageToPlayer(
   } else {
     battle.playerAnim = player.currentHp === 0 ? 'death' : 'hit';
     battle.playerAnimTimer = player.currentHp === 0 ? 0.7 : 0.35;
+  }
+
+  // Passive Proc: Thorns reflection on Block / Guard (Sturdy Ribs / Immortal Bulwark)
+  if (
+    res.isBlocked &&
+    (player.unlockedSkillIds.includes('def_t1_plate') ||
+      player.unlockedSkillIds.includes('def_t2_bulwark'))
+  ) {
+    const enemy = getActiveEnemy(battle);
+    if (enemy && enemy.currentHp > 0) {
+      const pStats = computePlayerStats(player, battle.playerBuffs);
+      const mult = player.unlockedSkillIds.includes('def_t2_bulwark') ? 0.55 : 0.3;
+      const thornsDmg = Math.max(4, Math.round(pStats.def * mult));
+      enemy.currentHp = Math.max(0, enemy.currentHp - thornsDmg);
+      events.vfx.push({
+        target: 'enemy',
+        text: `THORNS -${thornsDmg}`,
+        color: '#94a3b8',
+        yOffset: 16,
+        burstColor: '#94a3b8',
+        burstCount: 8,
+      });
+      if (enemy.currentHp > 0) {
+        dealStaggerToEnemy(battle, enemy, 12, events);
+      }
+    }
   }
 
   events.sfx.push(res.isBlocked ? 'block' : 'hit');

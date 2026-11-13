@@ -187,6 +187,12 @@ export interface CombatEnemy {
   materialDrop: { id: MaterialId; amount: number };
 }
 
+export interface SkillPreset {
+  name: string;
+  skillIds: string[];
+  ultimateId: string;
+}
+
 export interface PlayerState {
   name: string;
   classTier: 1 | 2;
@@ -197,6 +203,7 @@ export interface PlayerState {
   unlockedSkillIds: string[];
   equippedSkillIds: string[]; // Max 6
   equippedUltimateId: string; // Max 1
+  skillPresets?: SkillPreset[];
   currentHp: number;
   currentMp: number;
   ultimateCharge: number; // 0..100

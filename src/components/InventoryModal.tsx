@@ -1,7 +1,11 @@
-import { Shield, Sword, X } from 'lucide-react';
+import { Shield, Sword, Trash2, Wrench, X } from 'lucide-react';
 import { MATERIAL_META, STAT_LABELS } from '../game/data';
 import { RARITY_META } from '../game/palette';
-import { computePlayerStats, getEquipmentEffectiveStats } from '../game/rpgLogic';
+import {
+  compareEquipmentStats,
+  computePlayerStats,
+  getEquipmentEffectiveStats,
+} from '../game/rpgLogic';
 import {
   EquipmentItem,
   EquipmentSlot,
@@ -15,6 +19,7 @@ interface InventoryModalProps {
   onClose: () => void;
   onEquipItem: (itemId: string) => void;
   onSellItem: (itemId: string) => void;
+  onBulkDispose: (maxRarity: 'common' | 'uncommon', mode: 'sell' | 'salvage') => void;
 }
 
 const SLOTS: { key: EquipmentSlot; label: string }[] = [
@@ -40,12 +45,14 @@ const STAT_KEYS: StatKey[] = [
 
 function ItemCard({
   item,
+  equippedMatch,
   actionLabel,
   onAction,
   secondaryLabel,
   onSecondary,
 }: {
   item: EquipmentItem;
+  equippedMatch?: EquipmentItem | null;
   actionLabel?: string;
   onAction?: () => void;
   secondaryLabel?: string;
@@ -53,6 +60,11 @@ function ItemCard({
 }) {
   const rMeta = RARITY_META[item.rarity];
   const effStats = getEquipmentEffectiveStats(item);
+  const diffEntries =
+    equippedMatch !== undefined
+      ? (Object.entries(compareEquipmentStats(item, equippedMatch)) as [StatKey, number][])
+      : [];
+
   return (
     <div
       className="p-2.5 border-2 flex flex-col justify-between gap-2"
@@ -80,6 +92,23 @@ function ItemCard({
           <div className="mt-1 pt-1 border-t border-white/10 flex flex-wrap gap-x-2.5 text-[10px] font-mono-num text-[#fde047]">
             {item.affixes.map((af, idx) => (
               <span key={`${af.stat}_${idx}`}>{af.label}</span>
+            ))}
+          </div>
+        )}
+
+        {equippedMatch !== undefined && diffEntries.length > 0 && (
+          <div
+            data-testid={`gear-diff-${item.id}`}
+            className="mt-1.5 pt-1 border-t border-white/10 flex flex-wrap items-center gap-1.5 text-[10px] font-mono-num"
+          >
+            <span className="text-[#94a3b8]">vs Equipped:</span>
+            {diffEntries.map(([k, delta]) => (
+              <span
+                key={k}
+                className={delta > 0 ? 'text-[#4ade80] font-bold' : 'text-[#fb7185] font-bold'}
+              >
+                {delta > 0 ? `+${delta}` : delta} {STAT_LABELS[k]}
+              </span>
             ))}
           </div>
         )}
@@ -116,8 +145,12 @@ export function InventoryModal({
   onClose,
   onEquipItem,
   onSellItem,
+  onBulkDispose,
 }: InventoryModalProps) {
   const stats = computePlayerStats(player);
+  const bulkCount = player.inventory.filter(
+    (i) => i.rarity === 'common' || i.rarity === 'uncommon'
+  ).length;
 
   return (
     <div className="fixed inset-0 z-30 bg-black/75 flex items-center justify-center p-4">
@@ -189,12 +222,37 @@ export function InventoryModal({
             </div>
           </div>
 
-          {/* Right: Bag Gear + Materials & Consumables */}
+          {/* Right: Bag Gear + Bulk Controls + Materials & Consumables */}
           <div className="lg:col-span-7 flex flex-col gap-4">
             <div>
-              <h3 className="font-pixel text-xs text-[#e6d8bd] mb-2">
-                Equipment Bag ({player.inventory.length} items)
-              </h3>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                <h3 className="font-pixel text-xs text-[#e6d8bd]">
+                  Equipment Bag ({player.inventory.length} items)
+                </h3>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    data-testid="bulk-sell"
+                    disabled={bulkCount === 0}
+                    onClick={() => onBulkDispose('uncommon', 'sell')}
+                    className="flex items-center gap-1 font-pixel text-[10px] px-2.5 py-1 bg-[#2d2544] text-[#f7c948] border border-[#4b3f6b] hover:border-[#f7c948] disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span>Bulk Sell C/U ({bulkCount})</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="bulk-salvage"
+                    disabled={bulkCount === 0}
+                    onClick={() => onBulkDispose('uncommon', 'salvage')}
+                    className="flex items-center gap-1 font-pixel text-[10px] px-2.5 py-1 bg-[#1f2937] text-[#38bdf8] border border-[#38bdf8]/60 hover:border-[#38bdf8] disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <Wrench className="w-3 h-3" />
+                    <span>Salvage C/U ({bulkCount})</span>
+                  </button>
+                </div>
+              </div>
+
               {player.inventory.length === 0 ? (
                 <div className="p-6 border border-[#4b3f6b] bg-[#0e0b16]/60 text-xs text-[#94a3b8]">
                   Defeat monsters, open chests, or visit the Shop near a Fireplace to find tiered gear.
@@ -205,6 +263,7 @@ export function InventoryModal({
                     <ItemCard
                       key={item.id}
                       item={item}
+                      equippedMatch={player.equipment[item.slot]}
                       actionLabel="Equip"
                       onAction={() => onEquipItem(item.id)}
                       secondaryLabel={`Sell (${item.sellValue}G)`}

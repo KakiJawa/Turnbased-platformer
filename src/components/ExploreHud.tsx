@@ -1,10 +1,11 @@
-import { Backpack, GitBranch, Pause, Volume2, VolumeX } from 'lucide-react';
+import { AlertTriangle, Backpack, GitBranch, Pause, Volume2, VolumeX } from 'lucide-react';
 import { computePlayerStats, getXpToNextLevel } from '../game/rpgLogic';
 import { PlayerState, StageDefinition, WorldEntity } from '../game/types';
 
 interface ExploreHudProps {
   player: PlayerState;
   stage: StageDefinition;
+  playerX: number;
   nearbyInteractable: WorldEntity | null;
   muted: boolean;
   onToggleMute: () => void;
@@ -18,6 +19,7 @@ interface ExploreHudProps {
 export function ExploreHud({
   player,
   stage,
+  playerX,
   nearbyInteractable,
   muted,
   onToggleMute,
@@ -43,6 +45,15 @@ export function ExploreHud({
       : nearbyInteractable?.kind === 'portal'
       ? 'Enter Next Zone [E]'
       : null;
+
+  const activeEnemies = stage.entities.filter((e) => e.kind === 'enemy' && !e.defeated);
+  const bossEntity = stage.entities.find((e) => e.kind === 'enemy' && e.enemyRarity === 'boss');
+  const bossDefeated = Boolean(bossEntity?.defeated);
+  const nearbyThreat = activeEnemies.find(
+    (e) =>
+      (e.enemyRarity === 'boss' || e.enemyRarity === 'elite') &&
+      Math.abs(e.x - playerX) < 220
+  );
 
   return (
     <div className="fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-3 md:p-4">
@@ -181,8 +192,25 @@ export function ExploreHud({
         </div>
       </div>
 
-      {/* Bottom Interactive Prompt / Controls Hint */}
+      {/* Bottom Interactive Prompt, Stage Minimap & Controls Hint */}
       <div className="flex flex-col items-center gap-2 pb-1">
+        {nearbyThreat && (
+          <div
+            data-testid="enemy-proximity-alert"
+            className={`pointer-events-none flex items-center gap-1.5 px-3 py-1 border-2 font-pixel text-[11px] shadow-[0_3px_0_#0e0b16] animate-juicy-pop ${
+              nearbyThreat.enemyRarity === 'boss'
+                ? 'bg-[#3d1221] border-[#c084fc] text-[#f5d0fe]'
+                : 'bg-[#2d1b12] border-[#fb923c] text-[#fed7aa]'
+            }`}
+          >
+            <AlertTriangle className="w-3.5 h-3.5" />
+            <span>
+              {nearbyThreat.enemyRarity === 'boss' ? 'BOSS NEARBY: ' : 'ELITE AHEAD: '}
+              {nearbyThreat.enemyName}
+            </span>
+          </div>
+        )}
+
         {interactLabel && (
           <button
             type="button"
@@ -192,6 +220,69 @@ export function ExploreHud({
             {interactLabel}
           </button>
         )}
+
+        {/* 16-Bit Stage Minimap & Threat Tracker */}
+        <div
+          data-testid="stage-minimap"
+          className="pointer-events-auto bg-[#1b162b]/95 border-2 border-[#4b3f6b] px-3 py-1.5 shadow-[0_3px_0_#0e0b16] w-full max-w-lg flex flex-col gap-1"
+        >
+          <div className="flex items-center justify-between text-[10px] font-mono-num text-[#cbd5e1]">
+            <span className="font-pixel text-[#f7c948]">STAGE MAP · Z{stage.zone}</span>
+            <div className="flex items-center gap-3">
+              <span>Enemies: {activeEnemies.length}</span>
+              <span className={bossDefeated ? 'text-[#4ade80]' : 'text-[#fb7185]'}>
+                Boss: {bossDefeated ? 'Defeated' : 'Active'}
+              </span>
+            </div>
+          </div>
+
+          <div className="relative h-3 bg-[#0e0b16] border border-[#4b3f6b]">
+            {stage.entities.map((ent) => {
+              if (ent.kind === 'gold' || ent.kind === 'material') return null;
+              if (ent.kind === 'chest' && ent.opened) return null;
+              if (ent.kind === 'enemy' && ent.defeated) return null;
+
+              const leftPct = Math.max(1, Math.min(98, (ent.x / stage.width) * 100));
+              let color = '#94a3b8';
+              let sizeCls = 'w-1.5 h-2 top-0.5';
+              if (ent.kind === 'fireplace' || ent.kind === 'shop') {
+                color = '#f28729';
+              } else if (ent.kind === 'chest') {
+                color = '#facc15';
+              } else if (ent.kind === 'portal') {
+                color = bossDefeated ? '#4ade80' : '#4b3f6b';
+                sizeCls = 'w-2 h-2.5 top-0';
+              } else if (ent.kind === 'enemy') {
+                if (ent.enemyRarity === 'boss') {
+                  color = '#c084fc';
+                  sizeCls = 'w-2.5 h-2.5 top-0';
+                } else if (ent.enemyRarity === 'elite') {
+                  color = '#fb923c';
+                  sizeCls = 'w-2 h-2 top-0.5';
+                } else {
+                  color = '#ef4444';
+                }
+              }
+              return (
+                <div
+                  key={ent.id}
+                  title={ent.enemyName ?? ent.kind}
+                  className={`absolute ${sizeCls}`}
+                  style={{ left: `${leftPct}%`, backgroundColor: color, transform: 'translateX(-50%)' }}
+                />
+              );
+            })}
+            {/* Player Marker */}
+            <div
+              className="absolute top-0 bottom-0 w-2 bg-[#38bdf8] border border-white"
+              style={{
+                left: `${Math.max(1, Math.min(98, (playerX / stage.width) * 100))}%`,
+                transform: 'translateX(-50%)',
+              }}
+            />
+          </div>
+        </div>
+
         <div className="text-[11px] font-pixel text-[#f4efe6]/85 drop-shadow-[0_2px_0_#0e0b16]">
           A/D Move · Space Jump · E Interact
         </div>

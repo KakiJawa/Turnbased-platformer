@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  canUseComboFinisher,
+  canUseStaggerExecute,
   createBattleState,
   executePlayerAction,
   getActiveEnemy,
@@ -253,4 +255,108 @@ test('Combo counter scales Crit DMG & Stagger DMG, tracks total damage, preserve
   } finally {
     Math.random = origRandom;
   }
+});
+
+test('Combo Finisher and Stagger Execute consume combo stacks for burst crit & instant Stagger Break', () => {
+  const player = createInitialPlayer();
+  const enemy = spawnEnemyFromTemplate('farm_cow_elite');
+  enemy.stats.hp = 9999;
+  enemy.currentHp = 9999;
+  enemy.maxStagger = 150;
+  enemy.currentStagger = 150;
+
+  const battle = createBattleState(1, 'elite', 'z1_en_3', [enemy]);
+  assert.equal(canUseStaggerExecute(battle), false);
+  assert.equal(canUseComboFinisher(battle), false);
+
+  // Build 3-hit stack -> Stagger Execute ready
+  battle.comboCount = 3;
+  battle.comboDamage = 90;
+  assert.equal(canUseStaggerExecute(battle), true);
+  assert.equal(canUseComboFinisher(battle), false);
+
+  executePlayerAction(battle, player, { kind: 'finisher', mode: 'execute' });
+  assert.equal(enemy.currentStagger, 0);
+  assert.ok(enemy.staggeredTurns > 0);
+  assert.equal(battle.comboCount, 0);
+  assert.equal(battle.comboDamage, 0);
+
+  // Build 5-hit stack -> Combo Finisher deals big damage scaled by comboDamage
+  battle.phase = 'player_turn';
+  battle.comboCount = 5;
+  battle.comboDamage = 300;
+  assert.equal(canUseComboFinisher(battle), true);
+  const hpBefore = enemy.currentHp;
+  executePlayerAction(battle, player, { kind: 'finisher', mode: 'burst' });
+  const burstDmg = hpBefore - enemy.currentHp;
+  assert.ok(burstDmg >= 120, `Expected finisher burst dmg >= 120, got ${burstDmg}`);
+  assert.equal(battle.comboCount, 0);
+  assert.equal(battle.comboDamage, 0);
+});
+
+test('In-battle passive procs trigger Mana Flow, Harvest, Thorns, and Shadow Step', () => {
+  const player = createInitialPlayer();
+  player.unlockedSkillIds.push('mag_t1_focus', 'def_t1_plate', 'spd_t1_step', 'all_t1_seed');
+  player.currentHp = 60; // wounded so Harvest heal is visible
+  player.currentMp = 30;
+  player.ultimateCharge = 0;
+
+  const enemy = spawnEnemyFromTemplate('farm_cow_elite');
+  enemy.stats.hp = 9999;
+  enemy.currentHp = 9999;
+  enemy.maxStagger = 9999;
+  enemy.currentStagger = 9999;
+  const battle = createBattleState(1, 'elite', 'z1_en_3', [enemy]);
+
+  // Mana Flow refunds part of Pitchfork Thrust (8 MP cost -> net spend < 8)
+  const mpBefore = player.currentMp;
+  const castEv = executePlayerAction(battle, player, { kind: 'skill', skillId: 'phy_t1_slash' });
+  const hasHarvest = castEv.vfx.some((v) => v.text.includes('HARVEST'));
+  const hasManaFlow = castEv.vfx.some((v) => v.text.includes('MANA FLOW'));
+  assert.equal(hasManaFlow, true);
+  assert.equal(hasHarvest, true);
+  assert.ok(player.currentMp > mpBefore - 8);
+  assert.ok(player.currentHp > 60);
+
+  // Guard + enemy basic hit triggers Thorns damage to enemy
+  battle.phase = 'player_turn';
+  executePlayerAction(battle, player, { kind: 'guard' });
+  const enemyHpBefore = enemy.currentHp;
+  battle.pendingEnemyAction = 'basic';
+  const origRandom = Math.random;
+  Math.random = () => 0.99;
+  try {
+    let sawThorns = false;
+    for (let i = 0; i < 30 && battle.phase !== 'player_turn'; i++) {
+      const ev = stepBattleTimeline(battle, player, 0.05);
+      if (ev.vfx.some((v) => v.text.includes('THORNS'))) sawThorns = true;
+    }
+    assert.equal(sawThorns, true);
+    assert.ok(enemy.currentHp < enemyHpBefore);
+  } finally {
+    Math.random = origRandom;
+  }
+
+  // QTE Dodge triggers Shadow Step (+12% ULT & spd_up buff)
+  player.ultimateCharge = 0;
+  battle.phase = 'qte_dodge';
+  battle.qte = {
+    active: true,
+    phase: 'dodge',
+    promptLabel: 'DODGE!',
+    cursor: 0.5,
+    speed: 1,
+    direction: 1,
+    zoneStart: 0.35,
+    zoneEnd: 0.65,
+    result: 'pending',
+    resultTimer: 2,
+    pendingEnemyDamage: 20,
+    pendingEnemyStagger: 15,
+    pendingMoveName: 'Horn',
+  };
+  const dodgeEv = resolveQteInput(battle, player, false);
+  assert.ok(dodgeEv.vfx.some((v) => v.text.includes('SHADOW STEP')));
+  assert.ok(player.ultimateCharge >= 12);
+  assert.ok(battle.playerBuffs.some((b) => b.type === 'spd_up'));
 });

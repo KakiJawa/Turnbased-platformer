@@ -4,16 +4,22 @@ import {
   MAX_EQUIPPED_SKILLS,
   MAX_TIER1_LEVEL,
   advanceToHeroClass,
+  bulkDisposeInventory,
   calculateDamage,
   canAdvanceClass,
+  compareEquipmentStats,
   computePlayerStats,
   createInitialPlayer,
   enchantEquipment,
   generateEquipment,
+  getRespecCost,
   getXpToNextLevel,
   grantXp,
+  loadSkillPreset,
   reforgeEquipment,
+  respecSkills,
   rollRarityForEnemy,
+  saveSkillPreset,
   spawnEnemyWave,
   toggleEquipSkill,
   unlockSkillNode,
@@ -188,4 +194,63 @@ test('Zone-gated equipment rarity strictly limits Zones 1-3 to Common-Rare, 4-6 
     assert.equal(rollRarityForEnemy('boss', zone, () => 0.01), 'mythic');
     assert.equal(rollRarityForEnemy('boss', zone, () => 0.15), 'legendary');
   }
+});
+
+test('Side-by-side gear comparison and bulk sell/salvage work accurately', () => {
+  const equipped = generateEquipment('weapon', 'common', 1);
+  const upgrade = generateEquipment('weapon', 'rare', 2);
+  const diff = compareEquipmentStats(upgrade, equipped);
+  assert.ok((diff.atk ?? 0) > 0);
+
+  let p = createInitialPlayer();
+  const c1 = generateEquipment('armor', 'common', 1);
+  const u1 = generateEquipment('helm', 'uncommon', 2);
+  const r1 = generateEquipment('weapon', 'rare', 3);
+  p.inventory = [c1, u1, r1];
+
+  const sold = bulkDisposeInventory(p, 'uncommon', 'sell');
+  assert.equal(sold.count, 2);
+  assert.equal(sold.goldGained, c1.sellValue + u1.sellValue);
+  assert.equal(sold.player.inventory.length, 1);
+  assert.equal(sold.player.inventory[0].id, r1.id);
+
+  const salvaged = bulkDisposeInventory(p, 'uncommon', 'salvage');
+  assert.equal(salvaged.count, 2);
+  assert.equal(salvaged.player.inventory.length, 1);
+  const totalMatsGained = Object.values(salvaged.materialsGained).reduce(
+    (acc, n) => acc + (n ?? 0),
+    0
+  );
+  assert.equal(totalMatsGained, 3);
+});
+
+test('Skill respec refunds points for gold and loadout presets save/load cleanly', () => {
+  let p = createInitialPlayer();
+  p.skillPoints = 4;
+  p.gold = 200;
+
+  p = unlockSkillNode(p, 'mag_t1_spark');
+  p = unlockSkillNode(p, 'mag_t1_focus');
+  p = unlockSkillNode(p, 'mag_t1_nova');
+  assert.equal(p.skillPoints, 1);
+
+  p = saveSkillPreset(p, 0);
+  p = toggleEquipSkill(p, 'mag_t1_spark'); // unequip spark
+  assert.equal(p.equippedSkillIds.includes('mag_t1_spark'), false);
+
+  p = loadSkillPreset(p, 0);
+  assert.equal(p.equippedSkillIds.includes('mag_t1_spark'), true);
+
+  // Respec with insufficient gold fails
+  const broke = respecSkills({ ...p, gold: 5 });
+  assert.equal(broke.success, false);
+
+  const cost = getRespecCost(p);
+  assert.ok(cost >= 30);
+  const res = respecSkills(p);
+  assert.equal(res.success, true);
+  assert.equal(res.refundedPoints, 3);
+  assert.equal(res.player.skillPoints, 4);
+  assert.equal(res.player.gold, 200 - cost);
+  assert.deepEqual(res.player.unlockedSkillIds, ['phy_t1_slash']);
 });

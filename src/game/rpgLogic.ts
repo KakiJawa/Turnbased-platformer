@@ -51,6 +51,10 @@ export function createInitialPlayer(): PlayerState {
     unlockedSkillIds: ['phy_t1_slash'],
     equippedSkillIds: ['phy_t1_slash'],
     equippedUltimateId: '',
+    skillPresets: [
+      { name: 'Preset 1', skillIds: ['phy_t1_slash'], ultimateId: '' },
+      { name: 'Preset 2', skillIds: ['phy_t1_slash'], ultimateId: '' },
+    ],
     currentHp: VILLAGER_BASE_STATS.hp + 12,
     currentMp: VILLAGER_BASE_STATS.mp,
     ultimateCharge: 0,
@@ -319,6 +323,172 @@ export function toggleEquipSkill(player: PlayerState, skillId: string): PlayerSt
   return {
     ...player,
     equippedSkillIds: [...player.equippedSkillIds, skillId],
+  };
+}
+
+export function getRespecCost(player: PlayerState): number {
+  const extraUnlocked = player.unlockedSkillIds.filter((id) => id !== 'phy_t1_slash').length;
+  if (extraUnlocked === 0) return 0;
+  return Math.max(30, extraUnlocked * 15);
+}
+
+export function respecSkills(player: PlayerState): {
+  success: boolean;
+  player: PlayerState;
+  refundedPoints: number;
+  reason?: string;
+} {
+  const extraIds = player.unlockedSkillIds.filter((id) => id !== 'phy_t1_slash');
+  if (extraIds.length === 0) {
+    return {
+      success: false,
+      player,
+      refundedPoints: 0,
+      reason: 'No unlocked skills to refund yet.',
+    };
+  }
+  const cost = getRespecCost(player);
+  if (player.gold < cost) {
+    return {
+      success: false,
+      player,
+      refundedPoints: 0,
+      reason: `Need ${cost} Gold to respec.`,
+    };
+  }
+  let refundedPoints = 0;
+  for (const id of extraIds) {
+    const node = SKILL_TREE.find((s) => s.id === id);
+    refundedPoints += node?.costPoints ?? 1;
+  }
+  const next: PlayerState = {
+    ...player,
+    gold: player.gold - cost,
+    skillPoints: player.skillPoints + refundedPoints,
+    unlockedSkillIds: ['phy_t1_slash'],
+    equippedSkillIds: ['phy_t1_slash'],
+    equippedUltimateId: '',
+  };
+  const stats = computePlayerStats(next);
+  next.currentHp = Math.min(stats.hp, next.currentHp);
+  next.currentMp = Math.min(stats.mp, next.currentMp);
+  return { success: true, player: next, refundedPoints };
+}
+
+export function saveSkillPreset(player: PlayerState, slotIndex: number): PlayerState {
+  const existing = player.skillPresets ?? [
+    { name: 'Preset 1', skillIds: ['phy_t1_slash'], ultimateId: '' },
+    { name: 'Preset 2', skillIds: ['phy_t1_slash'], ultimateId: '' },
+  ];
+  const updated = existing.map((p, idx) =>
+    idx === slotIndex
+      ? {
+          ...p,
+          skillIds: [...player.equippedSkillIds],
+          ultimateId: player.equippedUltimateId,
+        }
+      : p
+  );
+  return { ...player, skillPresets: updated };
+}
+
+export function loadSkillPreset(player: PlayerState, slotIndex: number): PlayerState {
+  const preset = player.skillPresets?.[slotIndex];
+  if (!preset) return player;
+  const validSkills = preset.skillIds
+    .filter((id) => player.unlockedSkillIds.includes(id))
+    .slice(0, MAX_EQUIPPED_SKILLS);
+  const validUlt =
+    preset.ultimateId && player.unlockedSkillIds.includes(preset.ultimateId)
+      ? preset.ultimateId
+      : '';
+  return {
+    ...player,
+    equippedSkillIds: validSkills.length > 0 ? validSkills : ['phy_t1_slash'],
+    equippedUltimateId: validUlt,
+  };
+}
+
+export function compareEquipmentStats(
+  candidate: EquipmentItem,
+  equipped: EquipmentItem | null
+): Partial<Record<StatKey, number>> {
+  const candStats = getEquipmentEffectiveStats(candidate);
+  const eqStats = equipped ? getEquipmentEffectiveStats(equipped) : {};
+  const keys = new Set<StatKey>([
+    ...(Object.keys(candStats) as StatKey[]),
+    ...(Object.keys(eqStats) as StatKey[]),
+  ]);
+  const diff: Partial<Record<StatKey, number>> = {};
+  for (const k of keys) {
+    const delta = Math.round(((candStats[k] ?? 0) - (eqStats[k] ?? 0)) * 10) / 10;
+    if (delta !== 0) {
+      diff[k] = delta;
+    }
+  }
+  return diff;
+}
+
+export function bulkDisposeInventory(
+  player: PlayerState,
+  maxRarity: 'common' | 'uncommon',
+  mode: 'sell' | 'salvage'
+): {
+  player: PlayerState;
+  count: number;
+  goldGained: number;
+  materialsGained: Partial<Record<MaterialId, number>>;
+} {
+  const maxIdx = RARITY_ORDER.indexOf(maxRarity);
+  const kept: EquipmentItem[] = [];
+  let count = 0;
+  let goldGained = 0;
+  const materialsGained: Partial<Record<MaterialId, number>> = {};
+  const nextMaterials: MaterialCounts = { ...player.materials };
+
+  const tierMaterialMap: MaterialId[] = [
+    'feather',
+    'hide',
+    'ironShard',
+    'orcFang',
+    'dragonScale',
+  ];
+
+  for (const item of player.inventory) {
+    if (RARITY_ORDER.indexOf(item.rarity) <= maxIdx) {
+      count += 1;
+      if (mode === 'sell') {
+        goldGained += item.sellValue;
+      } else {
+        const matIdx = Math.min(
+          tierMaterialMap.length - 1,
+          Math.max(0, Math.floor((item.tierLevel - 1) / 1.5))
+        );
+        const matId = tierMaterialMap[matIdx];
+        const amt = item.rarity === 'uncommon' ? 2 : 1;
+        nextMaterials[matId] += amt;
+        materialsGained[matId] = (materialsGained[matId] ?? 0) + amt;
+        goldGained += Math.max(2, Math.floor(item.sellValue * 0.25));
+      }
+    } else {
+      kept.push(item);
+    }
+  }
+
+  if (count === 0) {
+    return { player, count: 0, goldGained: 0, materialsGained: {} };
+  }
+
+  return {
+    player: {
+      ...player,
+      gold: player.gold + goldGained,
+      materials: nextMaterials,
+      inventory: kept,
+    },
+    count,
+    goldGained,
+    materialsGained,
   };
 }
 

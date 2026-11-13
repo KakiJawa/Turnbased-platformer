@@ -1,8 +1,15 @@
 interface TitleOverlayProps {
+  savedSummary?: {
+    className: string;
+    level: number;
+    zone: number;
+    gold: number;
+  } | null;
+  onContinue?: () => void;
   onStart: () => void;
 }
 
-export function TitleOverlay({ onStart }: TitleOverlayProps) {
+export function TitleOverlay({ savedSummary, onContinue, onStart }: TitleOverlayProps) {
   return (
     <div className="fixed inset-0 z-20 flex flex-col justify-between p-8 md:p-12 pointer-events-none">
       {/* Upper-Left Negative Space Title Emblem */}
@@ -44,14 +51,28 @@ export function TitleOverlay({ onStart }: TitleOverlayProps) {
           </text>
         </svg>
 
-        <div className="mt-6 flex items-center gap-4">
+        <div className="mt-6 flex flex-wrap items-center gap-3">
+          {savedSummary && onContinue && (
+            <button
+              type="button"
+              data-continue="true"
+              onClick={onContinue}
+              className="font-pixel px-6 py-3.5 text-sm md:text-base font-bold bg-[#4ade80] text-[#0e0b16] border-2 border-[#0e0b16] shadow-[0_4px_0_#0e0b16] hover:bg-[#86efac] active:translate-y-0.5 active:shadow-[0_2px_0_#0e0b16] transition-transform cursor-pointer whitespace-nowrap shrink-0"
+            >
+              CONTINUE ({savedSummary.className} Lv.{savedSummary.level} · Z{savedSummary.zone})
+            </button>
+          )}
           <button
             type="button"
             data-start="true"
             onClick={onStart}
-            className="font-pixel px-7 py-3.5 text-base font-bold bg-[#f7c948] text-[#0e0b16] border-2 border-[#0e0b16] shadow-[0_4px_0_#0e0b16] hover:bg-[#fde047] active:translate-y-0.5 active:shadow-[0_2px_0_#0e0b16] transition-transform cursor-pointer whitespace-nowrap shrink-0"
+            className={`font-pixel px-7 py-3.5 text-sm md:text-base font-bold border-2 border-[#0e0b16] shadow-[0_4px_0_#0e0b16] active:translate-y-0.5 active:shadow-[0_2px_0_#0e0b16] transition-transform cursor-pointer whitespace-nowrap shrink-0 ${
+              savedSummary
+                ? 'bg-[#2d2544] text-[#f7c948] hover:bg-[#3d335c]'
+                : 'bg-[#f7c948] text-[#0e0b16] hover:bg-[#fde047]'
+            }`}
           >
-            START ADVENTURE
+            {savedSummary ? 'NEW ADVENTURE' : 'START ADVENTURE'}
           </button>
         </div>
       </div>
