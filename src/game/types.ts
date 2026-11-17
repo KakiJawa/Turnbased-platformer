@@ -116,6 +116,14 @@ export type PetSpriteId =
   | 'pet_turtle'
   | 'pet_drake';
 
+export interface PetEvolutionTier {
+  minLevel: 1 | 3 | 5;
+  formName: string;
+  title: string;
+  assistName: string;
+  assistDesc: string;
+}
+
 export interface PetDefinition {
   id: string;
   sprite: PetSpriteId;
@@ -128,6 +136,42 @@ export interface PetDefinition {
   assistDesc: string;
   assistKind: 'physical' | 'magical_burn' | 'heal_shield' | 'hybrid_ult';
   assistPower: number;
+  evolutions: PetEvolutionTier[];
+}
+
+export type EnemyVariantId =
+  | 'standard'
+  | 'fierce'
+  | 'armored'
+  | 'swift'
+  | 'vampiric'
+  | 'hexed'
+  | 'colossal'
+  | 'thorny'
+  | 'twinborn'
+  | 'corrupted';
+
+export interface EnemyVariantMeta {
+  id: EnemyVariantId;
+  prefix: string;
+  name: string;
+  accent: string;
+  shortDesc: string;
+  hpMult?: number;
+  atkMult?: number;
+  matkMult?: number;
+  defMult?: number;
+  mdefMult?: number;
+  spdMult?: number;
+  maxStaggerMult?: number;
+  critBonus?: number;
+  blockBonus?: number;
+  dodgeBonus?: number;
+  startShieldHits?: number;
+  xpMult?: number;
+  goldMult?: number;
+  extraMaterial?: number;
+  qteSpeedBonus?: number;
 }
 
 export interface ArenaTrialDefinition {
@@ -136,8 +180,13 @@ export interface ArenaTrialDefinition {
   subtitle: string;
   minHighestZone: number;
   bossTemplateIds: string[];
+  variantIds?: EnemyVariantId[];
+  parTurns: number;
+  noConsumables?: boolean;
+  ruleBadge?: string;
   bonusGold: number;
   bonusXp: number;
+  bonusVoidEssence?: number;
   guaranteedRarity: Rarity;
   rewardZoneLevel: number;
 }
@@ -246,6 +295,10 @@ export interface CombatEnemy {
   templateId: string;
   sprite: SpriteId;
   name: string;
+  variantId: EnemyVariantId;
+  variantPrefix?: string;
+  variantAccent?: string;
+  variantDesc?: string;
   zone: number;
   rarity: EnemyRarity;
   level: number;
@@ -303,8 +356,10 @@ export interface PlayerState {
   inventory: EquipmentItem[];
   consumables: ConsumableItem[];
   ownedPetIds: string[];
+  petLevels?: Record<string, number>;
   equippedPetId: string | null;
   completedArenaIds: string[];
+  arenaBestTurns?: Record<string, number>;
   voidTowerUnlocked?: boolean;
   voidTowerBestFloor?: number;
   highestZone: number;
@@ -366,6 +421,8 @@ export interface WorldEntity {
   hazardDamagePct?: number;
   bounceVelocity?: number;
   enemyRarity?: EnemyRarity;
+  enemyTemplateId?: string;
+  enemyVariant?: EnemyVariantId;
   enemySprite?: SpriteId;
   enemyName?: string;
   patrolMinX?: number;

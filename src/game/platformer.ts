@@ -20,6 +20,31 @@ export interface PlatformerPlayer {
   petY: number;
 }
 
+export interface ZoneSealProgress {
+  nonBossTotal: number;
+  nonBossDefeated: number;
+  remaining: number;
+  sealed: boolean;
+}
+
+export function getZoneSealProgress(stage: StageDefinition): ZoneSealProgress {
+  const guards = stage.entities.filter(
+    (e) => e.kind === 'enemy' && e.enemyRarity !== 'boss'
+  );
+  const nonBossDefeated = guards.filter((e) => e.defeated).length;
+  const remaining = Math.max(0, guards.length - nonBossDefeated);
+  return {
+    nonBossTotal: guards.length,
+    nonBossDefeated,
+    remaining,
+    sealed: remaining > 0,
+  };
+}
+
+export function isBossSealed(stage: StageDefinition): boolean {
+  return getZoneSealProgress(stage).sealed;
+}
+
 export interface PlatformerStepResult {
   collectedGold: number;
   collectedMaterial: { id: NonNullable<WorldEntity['materialId']>; amount: number } | null;
@@ -29,6 +54,7 @@ export interface PlatformerStepResult {
   nearBouncePad: WorldEntity | null;
   nearbyInteractable: WorldEntity | null;
   triggeredEnemy: WorldEntity | null;
+  sealedBoss: WorldEntity | null;
 }
 
 export function createPlatformerPlayer(): PlatformerPlayer {
@@ -158,6 +184,8 @@ export function stepPlatformer(
   let nearBouncePad: WorldEntity | null = null;
   let nearbyInteractable: WorldEntity | null = null;
   let triggeredEnemy: WorldEntity | null = null;
+  let sealedBoss: WorldEntity | null = null;
+  const bossSealed = isBossSealed(stage);
 
   for (const ent of stage.entities) {
     if (ent.kind === 'enemy' && !ent.defeated) {
@@ -209,6 +237,18 @@ export function stepPlatformer(
       player.vy = -175;
       player.vx = -player.facing * 95;
       player.onGround = false;
+    } else if (
+      ent.kind === 'enemy' &&
+      !ent.defeated &&
+      ent.enemyRarity === 'boss' &&
+      bossSealed &&
+      dx < 26 &&
+      dy < 32
+    ) {
+      sealedBoss = ent;
+      const pushDir = player.x <= ent.x ? -1 : 1;
+      player.x = Math.max(16, Math.min(stage.width - 16, ent.x + pushDir * 28));
+      player.vx = pushDir * 65;
     } else if (ent.kind === 'enemy' && !ent.defeated && dx < 20 && dy < 28) {
       triggeredEnemy = ent;
     } else if (
@@ -243,5 +283,6 @@ export function stepPlatformer(
     nearBouncePad,
     nearbyInteractable,
     triggeredEnemy,
+    sealedBoss,
   };
 }

@@ -45,6 +45,7 @@ import {
 import {
   PlatformerPlayer,
   createPlatformerPlayer,
+  getZoneSealProgress,
   stepPlatformer,
 } from './game/platformer';
 import {
@@ -62,6 +63,7 @@ import {
   loadSkillPreset,
   reforgeEquipment,
   respecSkills,
+  restAtFireplace,
   rollRarityForEnemy,
   saveSkillPreset,
   spawnArenaBossWave,
@@ -69,6 +71,7 @@ import {
   spawnVoidTowerWave,
   toggleEquipSkill,
   toggleEquipmentLock,
+  trainPetFamiliar,
   unlockSkillNode,
 } from './game/rpgLogic';
 import { buildStage } from './game/stages';
@@ -144,6 +147,7 @@ export default function App() {
   const activeModalRef = useRef<'none' | 'inventory' | 'skills' | 'town'>('none');
   const victoryRecapRef = useRef<VictoryRecapData | null>(null);
   const lastHudSyncXRef = useRef<number>(pPlayerRef.current.x);
+  const lastSealToastAtRef = useRef<number>(-10);
 
   // Discrete React UI state synced only on events/turns
   const [mode, setMode] = useState<GameMode>('title');
@@ -331,8 +335,10 @@ export default function App() {
         ...(saved.player.materials ?? {}),
       },
       ownedPetIds: saved.player.ownedPetIds ?? [],
+      petLevels: saved.player.petLevels ?? {},
       equippedPetId: saved.player.equippedPetId ?? null,
       completedArenaIds: saved.player.completedArenaIds ?? [],
+      arenaBestTurns: saved.player.arenaBestTurns ?? {},
       skillPresets: saved.player.skillPresets ?? freshDefaults.skillPresets,
       voidTowerUnlocked: saved.player.voidTowerUnlocked ?? false,
       voidTowerBestFloor: saved.player.voidTowerBestFloor ?? 0,
@@ -379,13 +385,14 @@ export default function App() {
     (ent: WorldEntity) => {
       const stage = stageRef.current;
       const rarity = ent.enemyRarity ?? 'normal';
-      const preferredId =
+      const fallbackId =
         stage.zone === 1 && rarity === 'normal'
           ? ent.enemySprite === 'pig'
             ? 'farm_pig'
             : 'farm_chicken'
           : undefined;
-      const wave = spawnEnemyWave(stage.zone, rarity, preferredId);
+      const preferredId = ent.enemyTemplateId ?? fallbackId;
+      const wave = spawnEnemyWave(stage.zone, rarity, preferredId, ent.enemyVariant);
       const initialCombo = playerRef.current.unlockedSkillIds.includes('all_t3_overdrive') ? 2 : 0;
       battleRef.current = createBattleState(stage.zone, rarity, ent.id, wave, {
         initialCombo,
@@ -412,7 +419,11 @@ export default function App() {
         'boss',
         trial.id,
         wave,
-        { arenaTrialId: trial.id, initialCombo }
+        {
+          arenaTrialId: trial.id,
+          noConsumables: trial.noConsumables,
+          initialCombo,
+        }
       );
       openModal('none');
       keysHeldRef.current.clear();
@@ -455,13 +466,15 @@ export default function App() {
     if (!ent || modeRef.current !== 'explore') return;
 
     if (ent.kind === 'fireplace') {
-      const stats = computePlayerStats(playerRef.current);
-      playerRef.current.currentHp = stats.hp;
-      playerRef.current.currentMp = stats.mp;
-      playerRef.current.currentStagger = playerRef.current.maxStagger;
+      const rest = restAtFireplace(playerRef.current, stageRef.current.zone);
+      playerRef.current = rest.player;
       audio.playHeal();
       vfxRef.current.spawnBurst(ent.x, ent.y - 14, 14, '#f28729');
-      showToast('Rested at Fireplace! HP, MP & Stagger restored.');
+      showToast(
+        rest.fullHeal
+          ? 'Rested at Fireplace! HP, MP & Stagger fully restored.'
+          : `Camp Rest (Z${stageRef.current.zone}): +${rest.hpRecovered} HP, +${rest.mpRecovered} MP & Stagger restored.`
+      );
       setTownInitialTab('shop');
       openModal('town');
       persistCurrentRun();
@@ -498,18 +511,18 @@ export default function App() {
       ent.used = true;
       const zone = stageRef.current.zone;
       const stats = computePlayerStats(playerRef.current);
-      const hpGain = Math.round(stats.hp * 0.35);
-      const mpGain = Math.round(stats.mp * 0.35);
+      const hpGain = Math.round(stats.hp * 0.25);
+      const mpGain = Math.round(stats.mp * 0.25);
       const goldGain = 35 * zone;
       playerRef.current.currentHp = Math.min(stats.hp, playerRef.current.currentHp + hpGain);
       playerRef.current.currentMp = Math.min(stats.mp, playerRef.current.currentMp + mpGain);
-      playerRef.current.ultimateCharge = 100;
+      playerRef.current.ultimateCharge = Math.min(100, playerRef.current.ultimateCharge + 50);
       playerRef.current.gold += goldGain;
       audio.playHeal();
       vfxRef.current.spawnBurst(ent.x, ent.y - 18, 20, '#38bdf8');
       vfxRef.current.spawnRing(ent.x, ent.y - 18, 36, '#facc15');
-      vfxRef.current.spawnPopup(ent.x, ent.y - 30, `SHRINE BLESSING! +100% ULT +${goldGain}G`, '#38bdf8');
-      showToast(`Blessing Shrine activated: +${hpGain} HP, +${mpGain} MP, 100% ULT & +${goldGain}G!`);
+      vfxRef.current.spawnPopup(ent.x, ent.y - 30, `SHRINE BLESSING! +50% ULT +${goldGain}G`, '#38bdf8');
+      showToast(`Blessing Shrine activated: +${hpGain} HP, +${mpGain} MP, +50% ULT & +${goldGain}G!`);
       persistCurrentRun();
       syncUi();
       return;
@@ -694,7 +707,13 @@ export default function App() {
           } else if (code === 'KeyQ') handleBattleAction({ kind: 'attack' });
           else if (code === 'KeyG') handleBattleAction({ kind: 'guard' });
           else if (code === 'KeyU') handleBattleAction({ kind: 'ultimate' });
-          else if (code === 'KeyF') setBattleItemsOpen((v) => !v);
+          else if (code === 'KeyF') {
+            if (battle.noConsumables) {
+              showToast('Arena Rule: Consumables are sealed in this trial!');
+            } else {
+              setBattleItemsOpen((v) => !v);
+            }
+          }
           else if (code === 'KeyX') handleBattleAction({ kind: 'finisher', mode: 'execute' });
           else if (code === 'KeyC') handleBattleAction({ kind: 'finisher', mode: 'burst' });
           else if (code.startsWith('Digit')) {
@@ -733,6 +752,7 @@ export default function App() {
     handleInteract,
     handleQteTrigger,
     openModal,
+    showToast,
     startNewRun,
     syncUi,
     updateMode,
@@ -864,6 +884,16 @@ export default function App() {
           nearBouncePadRef.current = stepRes.nearBouncePad;
           movedEnough = true;
         }
+        if (stepRes.sealedBoss && elapsed - lastSealToastAtRef.current > 1.4) {
+          lastSealToastAtRef.current = elapsed;
+          const seal = getZoneSealProgress(stageRef.current);
+          audio.playBlock();
+          vfx.spawnRing(stepRes.sealedBoss.x, stepRes.sealedBoss.y - 16, 26, '#c084fc');
+          vfx.spawnPopup(stepRes.sealedBoss.x, stepRes.sealedBoss.y - 36, 'SEALED!', '#c084fc');
+          showToast(
+            `Boss Arena Sealed! Defeat ${seal.remaining} remaining guard${seal.remaining === 1 ? '' : 's'} first.`
+          );
+        }
         if (movedEnough) {
           lastHudSyncXRef.current = pPlayerRef.current.x;
           syncUi();
@@ -974,6 +1004,14 @@ export default function App() {
             rewards.xp += arenaTrial.bonusXp;
             rewards.levelsGained += xpRes.levelsGained;
 
+            if ((arenaTrial.bonusVoidEssence ?? 0) > 0) {
+              const ess = arenaTrial.bonusVoidEssence!;
+              playerRef.current.materials.voidEssence =
+                (playerRef.current.materials.voidEssence ?? 0) + ess;
+              rewards.materials.voidEssence =
+                (rewards.materials.voidEssence ?? 0) + ess;
+            }
+
             const slots: EquipmentSlot[] = ['weapon', 'armor', 'helm', 'charm'];
             const slot = slots[Math.floor(Math.random() * slots.length)];
             const bonusGear = generateEquipment(
@@ -991,6 +1029,21 @@ export default function App() {
               ];
             }
 
+            const prevBest = playerRef.current.arenaBestTurns?.[arenaTrial.id];
+            playerRef.current.arenaBestTurns = {
+              ...(playerRef.current.arenaBestTurns ?? {}),
+              [arenaTrial.id]: prevBest
+                ? Math.min(prevBest, battle.turnCount)
+                : battle.turnCount,
+            };
+
+            const arenaMedal: 'gold' | 'silver' | 'bronze' =
+              battle.turnCount <= arenaTrial.parTurns
+                ? 'gold'
+                : battle.turnCount <= arenaTrial.parTurns + 4
+                ? 'silver'
+                : 'bronze';
+
             const recap: VictoryRecapData = {
               zone: arenaTrial.rewardZoneLevel,
               title: `${arenaTrial.name.toUpperCase()} CLEARED!`,
@@ -1003,6 +1056,8 @@ export default function App() {
               levelsGained: rewards.levelsGained,
               maxComboCount: battle.maxComboCount,
               maxComboDamage: battle.maxComboDamage,
+              arenaMedal,
+              arenaParTurns: arenaTrial.parTurns,
             };
             victoryRecapRef.current = recap;
             setVictoryRecap(recap);
@@ -1165,7 +1220,7 @@ export default function App() {
 
     rafId = window.requestAnimationFrame(frame);
     return () => window.cancelAnimationFrame(rafId);
-  }, [applyCombatEvents, persistCurrentRun, startBattleFromWorldEntity, syncUi, updateMode]);
+  }, [applyCombatEvents, persistCurrentRun, showToast, startBattleFromWorldEntity, syncUi, updateMode]);
 
   // Click Enemy on Canvas to Target or Inspect Enemy Stats
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -1232,7 +1287,7 @@ export default function App() {
 
       {/* Toast Notification */}
       {toast && (
-        <div className="fixed top-28 left-1/2 -translate-x-1/2 z-50 bg-[#1b162b] border-2 border-[#f7c948] px-4 py-2 font-pixel text-xs text-[#f7c948] shadow-[0_4px_0_#0e0b16] animate-juicy-pop pointer-events-none">
+        <div className="fixed top-3 left-1/2 -translate-x-1/2 z-50 bg-[#1b162b] border-2 border-[#f7c948] px-4 py-1.5 font-pixel text-xs text-[#f7c948] shadow-[0_4px_0_#0e0b16] animate-juicy-pop pointer-events-none">
           {toast}
         </div>
       )}
@@ -1453,14 +1508,18 @@ export default function App() {
       {activeModal === 'town' && mode === 'explore' && (
         <FireplaceTownModal
           player={player}
+          zone={stage.zone}
           initialTab={townInitialTab}
           onClose={() => openModal('none')}
           onRestAtFireplace={() => {
-            const stats = computePlayerStats(playerRef.current);
-            playerRef.current.currentHp = stats.hp;
-            playerRef.current.currentMp = stats.mp;
-            playerRef.current.currentStagger = playerRef.current.maxStagger;
+            const rest = restAtFireplace(playerRef.current, stageRef.current.zone);
+            playerRef.current = rest.player;
             audio.playHeal();
+            showToast(
+              rest.fullHeal
+                ? 'Rested at Fireplace! Full HP, MP & Stagger restored.'
+                : `Camp Rest (Z${stageRef.current.zone}): +${rest.hpRecovered} HP, +${rest.mpRecovered} MP & Stagger restored.`
+            );
             persistCurrentRun();
             syncUi();
           }}
@@ -1548,6 +1607,20 @@ export default function App() {
             audio.playMenuBlip();
             persistCurrentRun();
             syncUi();
+          }}
+          onTrainPet={(petId) => {
+            const res = trainPetFamiliar(playerRef.current, petId);
+            if (!res.success) return { ok: false, msg: res.reason ?? 'Cannot train pet.' };
+            playerRef.current = res.player;
+            audio.playLevelUp();
+            const pet = PET_CATALOG.find((p) => p.id === petId);
+            const msg = res.evolved
+              ? `EVOLVED! ${pet?.name ?? 'Familiar'} reached Bond Lv.${res.newLevel}!`
+              : `${pet?.name ?? 'Familiar'} Bond raised to Lv.${res.newLevel}!`;
+            showToast(msg);
+            persistCurrentRun();
+            syncUi();
+            return { ok: true, msg };
           }}
           onStartArenaTrial={handleStartArenaTrial}
           onStartVoidTowerFloor={handleStartVoidTowerFloor}

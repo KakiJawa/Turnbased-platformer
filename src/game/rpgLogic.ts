@@ -1,6 +1,7 @@
 import {
   BRANCH_META,
   ENEMY_TEMPLATES,
+  ENEMY_VARIANTS,
   HERO_BASE_BONUS,
   HERO_GROWTH_PER_LEVEL,
   MATERIAL_META,
@@ -20,10 +21,13 @@ import {
   CombatEnemy,
   ConsumableItem,
   EnemyRarity,
+  EnemyVariantId,
   EquipmentItem,
   EquipmentSlot,
   MaterialCounts,
   MaterialId,
+  PetDefinition,
+  PetEvolutionTier,
   PlayerState,
   Rarity,
   SkillDefinition,
@@ -105,8 +109,10 @@ export function createInitialPlayer(): PlayerState {
       },
     ],
     ownedPetIds: [],
+    petLevels: {},
     equippedPetId: null,
     completedArenaIds: [],
+    arenaBestTurns: {},
     voidTowerUnlocked: false,
     voidTowerBestFloor: 0,
     highestZone: 1,
@@ -122,15 +128,15 @@ export function getTotalCharacterLevel(player: Pick<PlayerState, 'classTier' | '
 
 export function getXpToNextLevel(level: number, classTier: 1 | 2 | 3): number {
   if (classTier === 1) {
-    // Smooth progression from Lv 1 -> 20
-    return Math.round(45 + level * 22 + Math.pow(level, 1.55) * 6);
+    // Measured Tier 1 curve Lv 1 -> 20
+    return Math.round(58 + level * 30 + Math.pow(level, 1.65) * 8);
   }
   if (classTier === 2) {
-    // Tier 2 Hero: noticeably steeper XP curve than Tier 1 Villager
-    return Math.round(280 + level * 110 + Math.pow(level, 1.9) * 32);
+    // Tier 2 Hero: steeper midgame curve
+    return Math.round(360 + level * 145 + Math.pow(level, 1.95) * 42);
   }
   // Tier 3 Endgame Specialization
-  return Math.round(900 + level * 260 + Math.pow(level, 2.0) * 65);
+  return Math.round(1200 + level * 340 + Math.pow(level, 2.05) * 85);
 }
 
 export function canAdvanceClass(player: PlayerState): boolean {
@@ -203,12 +209,40 @@ export function grantXp(
 
   if (levelsGained > 0) {
     const stats = computePlayerStats(next);
-    next.currentHp = stats.hp;
-    next.currentMp = stats.mp;
+    next.currentHp = Math.min(stats.hp, next.currentHp + Math.round(stats.hp * 0.25));
+    next.currentMp = Math.min(stats.mp, next.currentMp + Math.round(stats.mp * 0.25));
     next.currentStagger = next.maxStagger;
   }
 
   return { player: next, levelsGained };
+}
+
+export function getFireplaceHealFraction(zone: number): number {
+  return zone <= 2 ? 1.0 : 0.65;
+}
+
+export function restAtFireplace(
+  player: PlayerState,
+  zone: number
+): { player: PlayerState; hpRecovered: number; mpRecovered: number; fullHeal: boolean } {
+  const stats = computePlayerStats(player);
+  const frac = getFireplaceHealFraction(zone);
+  const nextHp =
+    frac >= 1 ? stats.hp : Math.min(stats.hp, player.currentHp + Math.round(stats.hp * frac));
+  const nextMp =
+    frac >= 1 ? stats.mp : Math.min(stats.mp, player.currentMp + Math.round(stats.mp * frac));
+  const updated: PlayerState = {
+    ...player,
+    currentHp: nextHp,
+    currentMp: nextMp,
+    currentStagger: player.maxStagger,
+  };
+  return {
+    player: updated,
+    hpRecovered: Math.max(0, nextHp - player.currentHp),
+    mpRecovered: Math.max(0, nextMp - player.currentMp),
+    fullHeal: frac >= 1,
+  };
 }
 
 export function getEquipmentEffectiveStats(item: EquipmentItem): Partial<Stats> {
@@ -271,11 +305,12 @@ export function computePlayerStats(
     }
   }
 
-  // Equipped Pet Familiar passive stat bonus
+  // Equipped Pet Familiar passive stat bonus (scaled with Pet Bond Lv.1-5)
   if (player.equippedPetId) {
-    const pet = PET_CATALOG.find((p) => p.id === player.equippedPetId);
-    if (pet) {
-      for (const [k, val] of Object.entries(pet.statBonus)) {
+    const petLv = getPetLevel(player, player.equippedPetId);
+    const effectivePet = getPetEffectiveDefinition(player.equippedPetId, petLv);
+    if (effectivePet) {
+      for (const [k, val] of Object.entries(effectivePet.statBonus)) {
         const key = k as StatKey;
         stats[key] += val ?? 0;
       }
@@ -698,70 +733,235 @@ export function rollRarityForEnemy(
   // Zone 1 - 3: strictly Common to Rare
   if (zone <= 3) {
     if (enemyRarity === 'boss') {
-      if (r < 0.3) return 'rare';
-      if (r < 0.85) return 'uncommon';
+      if (r < 0.25) return 'rare';
+      if (r < 0.78) return 'uncommon';
       return 'common';
     }
     if (enemyRarity === 'elite') {
-      if (r < 0.12) return 'rare';
-      if (r < 0.58) return 'uncommon';
+      if (r < 0.09) return 'rare';
+      if (r < 0.5) return 'uncommon';
       return 'common';
     }
-    if (r < 0.02) return 'rare';
-    if (r < 0.16) return 'uncommon';
+    if (r < 0.015) return 'rare';
+    if (r < 0.14) return 'uncommon';
     return 'common';
   }
 
   // Zone 4 - 6: strictly Uncommon to Epic
   if (zone <= 6) {
     if (enemyRarity === 'boss') {
-      if (r < 0.38) return 'epic';
-      if (r < 0.88) return 'rare';
+      if (r < 0.3) return 'epic';
+      if (r < 0.8) return 'rare';
       return 'uncommon';
     }
     if (enemyRarity === 'elite') {
-      if (r < 0.18) return 'epic';
-      if (r < 0.7) return 'rare';
+      if (r < 0.14) return 'epic';
+      if (r < 0.6) return 'rare';
       return 'uncommon';
     }
-    if (r < 0.05) return 'epic';
-    if (r < 0.35) return 'rare';
+    if (r < 0.03) return 'epic';
+    if (r < 0.28) return 'rare';
     return 'uncommon';
   }
 
   // Zone 7 - 8: Rare to Mythic
   if (zone <= 8) {
     if (enemyRarity === 'boss') {
-      if (r < 0.08) return 'mythic';
-      if (r < 0.35) return 'legendary';
-      if (r < 0.8) return 'epic';
+      if (r < 0.06) return 'mythic';
+      if (r < 0.3) return 'legendary';
+      if (r < 0.76) return 'epic';
       return 'rare';
     }
     if (enemyRarity === 'elite') {
-      if (r < 0.02) return 'mythic';
-      if (r < 0.18) return 'legendary';
-      if (r < 0.65) return 'epic';
+      if (r < 0.015) return 'mythic';
+      if (r < 0.14) return 'legendary';
+      if (r < 0.58) return 'epic';
       return 'rare';
     }
-    if (r < 0.05) return 'legendary';
-    if (r < 0.38) return 'epic';
+    if (r < 0.035) return 'legendary';
+    if (r < 0.32) return 'epic';
     return 'rare';
   }
 
   // Zone 9 - 10 Endgame: Elevated Mythic & Legendary loot
   if (enemyRarity === 'boss') {
-    if (r < 0.22) return 'mythic';
-    if (r < 0.62) return 'legendary';
+    if (r < 0.19) return 'mythic';
+    if (r < 0.58) return 'legendary';
     return 'epic';
   }
   if (enemyRarity === 'elite') {
-    if (r < 0.08) return 'mythic';
-    if (r < 0.35) return 'legendary';
+    if (r < 0.06) return 'mythic';
+    if (r < 0.28) return 'legendary';
     return 'epic';
   }
-  if (r < 0.14) return 'legendary';
-  if (r < 0.58) return 'epic';
+  if (r < 0.1) return 'legendary';
+  if (r < 0.5) return 'epic';
   return 'rare';
+}
+
+export const MAX_PET_LEVEL = 5;
+
+export function getPetLevel(
+  player: Pick<PlayerState, 'petLevels'>,
+  petId: string
+): number {
+  return Math.max(1, Math.min(MAX_PET_LEVEL, player.petLevels?.[petId] ?? 1));
+}
+
+export function getPetEvolutionTier(
+  pet: PetDefinition,
+  level: number
+): PetEvolutionTier {
+  const clamped = Math.max(1, Math.min(MAX_PET_LEVEL, level));
+  let chosen = pet.evolutions[0];
+  for (const evo of pet.evolutions) {
+    if (clamped >= evo.minLevel) {
+      chosen = evo;
+    }
+  }
+  return chosen;
+}
+
+export interface EffectivePetDefinition extends PetDefinition {
+  level: number;
+  evoTitle: string;
+  evolutionStage: 1 | 2 | 3;
+}
+
+export function getPetEffectiveDefinition(
+  petId: string,
+  level = 1
+): EffectivePetDefinition | undefined {
+  const pet = PET_CATALOG.find((p) => p.id === petId);
+  if (!pet) return undefined;
+  const clamped = Math.max(1, Math.min(MAX_PET_LEVEL, level));
+  const evo = getPetEvolutionTier(pet, clamped);
+  const statMult = 1 + (clamped - 1) * 0.28;
+  const scaledBonus: Partial<Stats> = {};
+  for (const [k, v] of Object.entries(pet.statBonus)) {
+    const key = k as StatKey;
+    scaledBonus[key] = Math.round((v ?? 0) * statMult);
+  }
+  const scaledPower =
+    pet.assistKind === 'heal_shield'
+      ? Math.round(pet.assistPower + (clamped - 1) * 1.5)
+      : Math.round(pet.assistPower * (1 + (clamped - 1) * 0.22) * 100) / 100;
+  const cd = clamped >= 5 && pet.assistEveryTurns === 3 ? 2 : pet.assistEveryTurns;
+  const evolutionStage: 1 | 2 | 3 = clamped >= 5 ? 3 : clamped >= 3 ? 2 : 1;
+
+  return {
+    ...pet,
+    level: clamped,
+    name: evo.formName,
+    evoTitle: evo.title,
+    evolutionStage,
+    statBonus: scaledBonus,
+    assistEveryTurns: cd,
+    assistName: evo.assistName,
+    assistDesc: evo.assistDesc,
+    assistPower: scaledPower,
+  };
+}
+
+export function getPetTrainCost(
+  petId: string,
+  currentLevel: number
+): { gold: number; materialId: MaterialId; materialAmount: number } {
+  const pet = PET_CATALOG.find((p) => p.id === petId) ?? PET_CATALOG[0];
+  const lv = Math.max(1, Math.min(MAX_PET_LEVEL - 1, currentLevel));
+  const gold = Math.max(180, Math.round(pet.price * (0.45 + lv * 0.38)));
+  let materialId: MaterialId = 'feather';
+  let materialAmount = 3;
+  if (lv === 1) {
+    materialId = petId === 'pet_chick' ? 'feather' : 'hide';
+    materialAmount = 3;
+  } else if (lv === 2) {
+    materialId = petId === 'pet_drake' ? 'orcFang' : 'ironShard';
+    materialAmount = 3;
+  } else if (lv === 3) {
+    materialId = petId === 'pet_wisp' || petId === 'pet_drake' ? 'dragonScale' : 'orcFang';
+    materialAmount = 3;
+  } else {
+    materialId = petId === 'pet_drake' ? 'voidEssence' : 'starlightOre';
+    materialAmount = petId === 'pet_drake' ? 2 : 3;
+  }
+  return { gold, materialId, materialAmount };
+}
+
+export function trainPetFamiliar(
+  player: PlayerState,
+  petId: string
+): {
+  success: boolean;
+  player: PlayerState;
+  newLevel: number;
+  evolved: boolean;
+  reason?: string;
+} {
+  if (!(player.ownedPetIds ?? []).includes(petId)) {
+    return {
+      success: false,
+      player,
+      newLevel: 1,
+      evolved: false,
+      reason: 'Adopt this companion first.',
+    };
+  }
+  const curLv = getPetLevel(player, petId);
+  if (curLv >= MAX_PET_LEVEL) {
+    return {
+      success: false,
+      player,
+      newLevel: curLv,
+      evolved: false,
+      reason: 'Max Bond Lv.5 already reached.',
+    };
+  }
+  const cost = getPetTrainCost(petId, curLv);
+  if (player.gold < cost.gold) {
+    return {
+      success: false,
+      player,
+      newLevel: curLv,
+      evolved: false,
+      reason: `Need ${cost.gold} Gold.`,
+    };
+  }
+  if ((player.materials[cost.materialId] ?? 0) < cost.materialAmount) {
+    return {
+      success: false,
+      player,
+      newLevel: curLv,
+      evolved: false,
+      reason: `Need ${cost.materialAmount}x ${MATERIAL_META[cost.materialId].name}.`,
+    };
+  }
+
+  const prevStats = computePlayerStats(player);
+  const nextLv = curLv + 1;
+  const next: PlayerState = {
+    ...player,
+    gold: player.gold - cost.gold,
+    materials: {
+      ...player.materials,
+      [cost.materialId]: (player.materials[cost.materialId] ?? 0) - cost.materialAmount,
+    },
+    petLevels: {
+      ...(player.petLevels ?? {}),
+      [petId]: nextLv,
+    },
+  };
+  const newStats = computePlayerStats(next);
+  const hpGain = Math.max(0, newStats.hp - prevStats.hp);
+  const mpGain = Math.max(0, newStats.mp - prevStats.mp);
+  next.currentHp = Math.min(newStats.hp, next.currentHp + hpGain);
+  next.currentMp = Math.min(newStats.mp, next.currentMp + mpGain);
+  return {
+    success: true,
+    player: next,
+    newLevel: nextLv,
+    evolved: nextLv === 3 || nextLv === 5,
+  };
 }
 
 export function buyPetFamiliar(
@@ -781,6 +981,7 @@ export function buyPetFamiliar(
     ...player,
     gold: player.gold - pet.price,
     ownedPetIds: [...owned, petId],
+    petLevels: { ...(player.petLevels ?? {}), [petId]: 1 },
     equippedPetId: petId, // Automatically equip newly adopted pet!
   };
   const stats = computePlayerStats(next);
@@ -811,7 +1012,10 @@ export function getEnchantCost(item: EquipmentItem): {
   materialAmount: number;
 } {
   const tierIdx = RARITY_ORDER.indexOf(item.rarity) + 1;
-  const gold = Math.round((25 + item.level * 20) * tierIdx * (1 + (item.tierLevel - 1) * 0.4));
+  const highLvlSpike = item.level >= 5 ? (item.level - 4) * 28 : 0;
+  const gold = Math.round(
+    (36 + item.level * 30 + highLvlSpike) * tierIdx * (1 + (item.tierLevel - 1) * 0.45)
+  );
   const materialOrder: MaterialId[] = [
     'feather',
     'hide',
@@ -828,7 +1032,7 @@ export function getEnchantCost(item: EquipmentItem): {
   return {
     gold,
     materialId: materialOrder[matIdx],
-    materialAmount: 1 + Math.floor(item.level / 2),
+    materialAmount: 1 + Math.floor(item.level * 0.75) + (item.level >= 7 ? 1 : 0),
   };
 }
 
@@ -838,7 +1042,7 @@ export function getReforgeCost(item: EquipmentItem): {
   materialAmount: number;
 } {
   const tierIdx = RARITY_ORDER.indexOf(item.rarity) + 1;
-  const gold = Math.round(35 * tierIdx * (1 + (item.tierLevel - 1) * 0.4));
+  const gold = Math.round(55 * tierIdx * (1 + (item.tierLevel - 1) * 0.45));
   const matId: MaterialId =
     item.tierLevel >= 10
       ? 'voidEssence'
@@ -854,7 +1058,7 @@ export function getReforgeCost(item: EquipmentItem): {
   return {
     gold,
     materialId: matId,
-    materialAmount: Math.max(1, Math.floor(tierIdx / 2)),
+    materialAmount: Math.max(1, Math.ceil(tierIdx * 0.75)),
   };
 }
 
@@ -925,38 +1129,80 @@ export function reforgeEquipment(
   };
 }
 
+export function rollEnemyVariant(
+  zone: number,
+  rarity: EnemyRarity,
+  rng: () => number = Math.random
+): EnemyVariantId {
+  if (rarity === 'boss') return 'standard';
+  if (zone <= 1) return rng() < 0.2 ? 'fierce' : 'standard';
+  const r = rng();
+  const variantChance = Math.min(0.85, 0.25 + zone * 0.06 + (rarity === 'elite' ? 0.15 : 0));
+  if (r > variantChance) return 'standard';
+  const earlyPool: EnemyVariantId[] = ['fierce', 'armored', 'swift'];
+  const midPool: EnemyVariantId[] = [
+    'fierce',
+    'armored',
+    'swift',
+    'vampiric',
+    'hexed',
+    'thorny',
+  ];
+  const latePool: EnemyVariantId[] = [
+    'fierce',
+    'armored',
+    'swift',
+    'vampiric',
+    'hexed',
+    'colossal',
+    'thorny',
+    'twinborn',
+    'corrupted',
+  ];
+  const pool = zone <= 3 ? earlyPool : zone <= 6 ? midPool : latePool;
+  return pool[Math.floor(rng() * pool.length)] ?? 'standard';
+}
+
 export function spawnEnemyFromTemplate(
   templateId: string,
-  levelScale = 0
+  levelScale = 0,
+  variantId: EnemyVariantId = 'standard',
+  xpMult = 1
 ): CombatEnemy {
   const tpl =
     ENEMY_TEMPLATES.find((e) => e.id === templateId) ?? ENEMY_TEMPLATES[0];
+  const variant = ENEMY_VARIANTS[variantId] ?? ENEMY_VARIANTS.standard;
   const mult = 1 + levelScale * 0.12;
   const stats: Stats = {
-    hp: Math.round(tpl.baseStats.hp * mult),
+    hp: Math.round(tpl.baseStats.hp * mult * (variant.hpMult ?? 1)),
     mp: Math.round(tpl.baseStats.mp * mult),
-    atk: Math.round(tpl.baseStats.atk * mult),
-    matk: Math.round(tpl.baseStats.matk * mult),
-    def: Math.round(tpl.baseStats.def * mult),
-    mdef: Math.round(tpl.baseStats.mdef * mult),
-    crit: tpl.baseStats.crit,
+    atk: Math.round(tpl.baseStats.atk * mult * (variant.atkMult ?? 1)),
+    matk: Math.round(tpl.baseStats.matk * mult * (variant.matkMult ?? 1)),
+    def: Math.round(tpl.baseStats.def * mult * (variant.defMult ?? 1)),
+    mdef: Math.round(tpl.baseStats.mdef * mult * (variant.mdefMult ?? 1)),
+    crit: Math.min(80, tpl.baseStats.crit + (variant.critBonus ?? 0)),
     critDmg: tpl.baseStats.critDmg,
-    block: tpl.baseStats.block,
-    dodge: tpl.baseStats.dodge,
-    speed: tpl.baseStats.speed,
+    block: Math.min(55, tpl.baseStats.block + (variant.blockBonus ?? 0)),
+    dodge: Math.min(50, tpl.baseStats.dodge + (variant.dodgeBonus ?? 0)),
+    speed: Math.max(5, Math.round(tpl.baseStats.speed * (variant.spdMult ?? 1))),
   };
-  const gold =
+  const baseGold =
     tpl.goldReward[0] +
     Math.floor(Math.random() * (tpl.goldReward[1] - tpl.goldReward[0] + 1));
   const matAmt =
     tpl.materialDrop.min +
-    Math.floor(Math.random() * (tpl.materialDrop.max - tpl.materialDrop.min + 1));
+    Math.floor(Math.random() * (tpl.materialDrop.max - tpl.materialDrop.min + 1)) +
+    (variant.extraMaterial ?? 0);
 
   return {
     uid: nextId('en'),
     templateId: tpl.id,
     sprite: tpl.sprite,
-    name: tpl.name,
+    name: variant.prefix ? `${variant.prefix} ${tpl.name}` : tpl.name,
+    variantId: variant.id,
+    variantPrefix: variant.prefix || undefined,
+    variantAccent: variant.accent,
+    variantDesc: variant.id === 'standard' ? undefined : variant.shortDesc,
     zone: tpl.zone,
     rarity: tpl.rarity,
     level: tpl.zone * 5 + levelScale,
@@ -964,8 +1210,8 @@ export function spawnEnemyFromTemplate(
     currentHp: stats.hp,
     currentMp: stats.mp,
     ultimateCharge: 20,
-    maxStagger: tpl.maxStagger,
-    currentStagger: tpl.maxStagger,
+    maxStagger: Math.round(tpl.maxStagger * (variant.maxStaggerMult ?? 1)),
+    currentStagger: Math.round(tpl.maxStagger * (variant.maxStaggerMult ?? 1)),
     staggeredTurns: 0,
     animState: 'idle',
     animTimer: 0,
@@ -976,11 +1222,11 @@ export function spawnEnemyFromTemplate(
     summonTemplateId: tpl.summonTemplateId,
     bossPhase: 1,
     enraged: false,
-    shieldHits: 0,
+    shieldHits: variant.startShieldHits ?? 0,
     summonedOnce: false,
     buffs: [],
-    xpReward: tpl.xpReward,
-    goldReward: gold,
+    xpReward: Math.max(1, Math.round(tpl.xpReward * (variant.xpMult ?? 1) * xpMult)),
+    goldReward: Math.round(baseGold * (variant.goldMult ?? 1)),
     materialDrop: { id: tpl.materialDrop.id, amount: matAmt },
   };
 }
@@ -988,13 +1234,14 @@ export function spawnEnemyFromTemplate(
 export function spawnEnemyWave(
   zone: number,
   encounterRarity: EnemyRarity,
-  preferredTemplateId?: string
+  preferredTemplateId?: string,
+  preferredVariant?: EnemyVariantId
 ): CombatEnemy[] {
   if (encounterRarity === 'boss') {
     const boss = ENEMY_TEMPLATES.find(
       (e) => e.zone === zone && e.rarity === 'boss'
     );
-    return [spawnEnemyFromTemplate(boss?.id ?? 'farm_rooster_boss')];
+    return [spawnEnemyFromTemplate(boss?.id ?? 'farm_rooster_boss', 0, preferredVariant ?? 'standard')];
   }
 
   const waveCount = 1 + Math.floor(Math.random() * 3); // 1 - 3 enemies per encounter!
@@ -1007,15 +1254,19 @@ export function spawnEnemyWave(
 
   const wave: CombatEnemy[] = [];
   for (let i = 0; i < waveCount; i++) {
+    const diminishingXp = i === 0 ? 1 : 0.55;
     if (i === 0 && preferredTemplateId) {
-      wave.push(spawnEnemyFromTemplate(preferredTemplateId));
+      const varId = preferredVariant ?? rollEnemyVariant(zone, encounterRarity);
+      wave.push(spawnEnemyFromTemplate(preferredTemplateId, 0, varId, diminishingXp));
     } else if (encounterRarity === 'elite' && i === waveCount - 1 && zoneElites.length > 0) {
-      wave.push(spawnEnemyFromTemplate(zoneElites[0].id));
+      const varId = i === 0 && preferredVariant ? preferredVariant : rollEnemyVariant(zone, 'elite');
+      wave.push(spawnEnemyFromTemplate(zoneElites[0].id, 0, varId, diminishingXp));
     } else {
       const pick =
         zoneNormals[Math.floor(Math.random() * zoneNormals.length)] ??
         ENEMY_TEMPLATES[0];
-      wave.push(spawnEnemyFromTemplate(pick.id));
+      const varId = i === 0 && preferredVariant ? preferredVariant : rollEnemyVariant(zone, 'normal');
+      wave.push(spawnEnemyFromTemplate(pick.id, 0, varId, diminishingXp));
     }
   }
   return wave;
@@ -1029,7 +1280,9 @@ export function toggleEquipmentLock(player: PlayerState, itemId: string): Player
 }
 
 export function spawnArenaBossWave(trial: ArenaTrialDefinition): CombatEnemy[] {
-  return trial.bossTemplateIds.map((id) => spawnEnemyFromTemplate(id));
+  return trial.bossTemplateIds.map((id, idx) =>
+    spawnEnemyFromTemplate(id, 0, trial.variantIds?.[idx] ?? 'standard')
+  );
 }
 
 export function getVoidTowerMutator(floor: number): VoidTowerMutator {
@@ -1050,6 +1303,16 @@ export function spawnVoidTowerWave(
 
   const bossPool = ['citadel_boss', 'peak_dragon_boss', 'star_empress_boss', 'void_architect_boss'];
   const floorPool = ['void_warden', 'star_leviathan', 'void_harbinger', 'star_sentinel', 'void_stalker'];
+  const towerVariants: EnemyVariantId[] = [
+    'fierce',
+    'armored',
+    'swift',
+    'vampiric',
+    'hexed',
+    'thorny',
+    'colossal',
+    'corrupted',
+  ];
 
   const templateIds = isBossFloor
     ? [bossPool[(Math.floor(safeFloor / 5) - 1) % bossPool.length]]
@@ -1059,7 +1322,11 @@ export function spawnVoidTowerWave(
       ];
 
   return templateIds.map((tplId, idx) => {
-    const en = spawnEnemyFromTemplate(tplId, levelScale);
+    const varId: EnemyVariantId =
+      safeFloor >= 2 && (idx === 0 || isBossFloor)
+        ? towerVariants[(safeFloor + idx) % towerVariants.length]
+        : 'standard';
+    const en = spawnEnemyFromTemplate(tplId, levelScale, varId, idx === 0 ? 1 : 0.55);
     en.zone = 10;
     en.level = 50 + safeFloor * 3;
     en.name = `F${safeFloor} · ${en.name}`;

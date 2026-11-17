@@ -27,13 +27,14 @@ import {
   canUseStaggerExecute,
   getActiveEnemy,
   getComboBonuses,
+  getEffectiveEnemyCombatStats,
   getEffectivePlayerCombatStats,
   getEquippedSkillsList,
   getLivingFieldEnemies,
   getUnlockedConsumables,
 } from '../game/battleEngine';
-import { BRANCH_META, PET_CATALOG, STAT_LABELS, TIER3_SPECIALIZATIONS } from '../game/data';
-import { getSkillById } from '../game/rpgLogic';
+import { BRANCH_META, ENEMY_VARIANTS, STAT_LABELS, TIER3_SPECIALIZATIONS } from '../game/data';
+import { getPetEffectiveDefinition, getPetLevel, getSkillById } from '../game/rpgLogic';
 import { PlayerState, StatKey } from '../game/types';
 import { getWeatherCombatEffect, getZoneWeatherProfile } from '../game/weather';
 
@@ -102,7 +103,10 @@ export function BattleHud({
   const enemy = getActiveEnemy(battle);
   const livingEnemies = getLivingFieldEnemies(battle);
   const equippedPet = player.equippedPetId
-    ? PET_CATALOG.find((p) => p.id === player.equippedPetId)
+    ? getPetEffectiveDefinition(
+        player.equippedPetId,
+        getPetLevel(player, player.equippedPetId)
+      )
     : undefined;
   const pStats = getEffectivePlayerCombatStats(player, battle);
   const weatherProfile = getZoneWeatherProfile(battle.zone);
@@ -269,7 +273,9 @@ export function BattleHud({
 
           {equippedPet && (
             <div className="mt-1 pt-1 border-t border-[#4b3f6b]/40 flex items-center justify-between text-[10px] font-mono-num">
-              <span style={{ color: equippedPet.accent }}>{equippedPet.name}</span>
+              <span style={{ color: equippedPet.accent }}>
+                {equippedPet.name} Lv.{equippedPet.level}
+              </span>
               <span className="text-[#e6d8bd]">
                 Assist in {Math.max(1, equippedPet.assistEveryTurns - battle.petTurnCounter)}t
               </span>
@@ -403,6 +409,24 @@ export function BattleHud({
                 <span className="font-pixel text-[9px] text-[#f4efe6]">MUTATOR:</span>
                 <span className="font-semibold" style={{ color: battle.voidTowerMutator.accent }}>
                   {battle.voidTowerMutator.name}
+                </span>
+              </div>
+            )}
+            {enemy && enemy.variantId !== 'standard' && (
+              <div
+                data-testid="enemy-variant-badge"
+                title={ENEMY_VARIANTS[enemy.variantId]?.shortDesc ?? enemy.variantDesc}
+                style={{ borderColor: enemy.variantAccent ?? '#f97316' }}
+                className="bg-[#1b162b]/95 border px-2 py-0.5 shadow-[0_2px_0_#0e0b16] flex items-center gap-1 text-[10px] font-mono-num"
+              >
+                <span
+                  className="font-pixel text-[9px]"
+                  style={{ color: enemy.variantAccent ?? '#f97316' }}
+                >
+                  {ENEMY_VARIANTS[enemy.variantId]?.prefix ?? enemy.variantId.toUpperCase()}:
+                </span>
+                <span className="text-[#e6d8bd]">
+                  {enemy.variantDesc ?? ENEMY_VARIANTS[enemy.variantId]?.shortDesc}
                 </span>
               </div>
             )}
@@ -549,10 +573,20 @@ export function BattleHud({
         <div className="pointer-events-auto self-center bg-[#1b162b] border-3 border-[#f7c948] p-4 shadow-[0_6px_0_#0e0b16] w-full max-w-md animate-juicy-pop">
           <div className="flex items-center justify-between border-b border-[#4b3f6b] pb-2 mb-3">
             <div>
-              <div className="font-pixel text-sm text-[#f7c948]">{enemy.name}</div>
+              <div className="font-pixel text-sm" style={{ color: enemy.variantId !== 'standard' ? enemy.variantAccent ?? '#f7c948' : '#f7c948' }}>
+                {enemy.name}
+              </div>
               <div className="text-xs text-[#cbd5e1] capitalize">
                 Zone {enemy.zone} · {enemy.rarity} · Lv.{enemy.level}
+                {enemy.variantId !== 'standard'
+                  ? ` · ${ENEMY_VARIANTS[enemy.variantId]?.prefix} Variant`
+                  : ''}
               </div>
+              {enemy.variantId !== 'standard' && (
+                <div className="text-[11px] font-mono-num mt-0.5" style={{ color: enemy.variantAccent ?? '#f97316' }}>
+                  Trait: {ENEMY_VARIANTS[enemy.variantId]?.shortDesc}
+                </div>
+              )}
             </div>
             <button
               type="button"
@@ -581,18 +615,23 @@ export function BattleHud({
             </div>
           </div>
 
-          {/* All 11 Base Stats */}
-          <div className="grid grid-cols-3 gap-1.5 text-xs font-mono-num mb-2">
-            {STAT_KEYS.map((k) => (
-              <div
-                key={k}
-                className="flex justify-between bg-[#2d2544]/70 px-2 py-1 border border-[#4b3f6b]/50"
-              >
-                <span className="text-[#cbd5e1]">{STAT_LABELS[k]}</span>
-                <span className="font-bold text-[#f4efe6]">{enemy.stats[k]}</span>
+          {/* All 11 Effective Stats */}
+          {(() => {
+            const effStats = getEffectiveEnemyCombatStats(enemy);
+            return (
+              <div className="grid grid-cols-3 gap-1.5 text-xs font-mono-num mb-2">
+                {STAT_KEYS.map((k) => (
+                  <div
+                    key={k}
+                    className="flex justify-between bg-[#2d2544]/70 px-2 py-1 border border-[#4b3f6b]/50"
+                  >
+                    <span className="text-[#cbd5e1]">{STAT_LABELS[k]}</span>
+                    <span className="font-bold text-[#f4efe6]">{effStats[k]}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            );
+          })()}
 
           <div className="text-[11px] text-[#cbd5e1] mt-2">
             Special Move: <span className="text-[#facc15] font-semibold">{enemy.specialName}</span> (Dodge QTE window)
@@ -665,7 +704,7 @@ export function BattleHud({
         )}
 
         {/* Pop-up Consumables Hotbar Tray */}
-        {showItems && (
+        {showItems && !battle.noConsumables && (
           <div
             data-testid="consumable-hotbar"
             className="bg-[#1b162b] border-2 border-[#4ade80] p-2.5 shadow-[0_4px_0_#0e0b16] flex flex-wrap items-center justify-center gap-2 animate-juicy-pop"
@@ -759,15 +798,20 @@ export function BattleHud({
             {/* Consumables Toggle */}
             <button
               type="button"
-              disabled={!isPlayerTurn}
+              data-testid="btn-battle-items"
+              disabled={!isPlayerTurn || Boolean(battle.noConsumables)}
               onClick={onToggleShowItems}
-              className="flex items-center gap-1.5 px-3 py-2 bg-[#142e22] hover:bg-[#1e4432] border-2 border-[#4ade80] shadow-[0_3px_0_#0e0b16] hover:-translate-y-0.5 active:translate-y-0.5 transition-all cursor-pointer disabled:opacity-45"
+              className="flex items-center gap-1.5 px-3 py-2 bg-[#142e22] hover:bg-[#1e4432] border-2 border-[#4ade80] shadow-[0_3px_0_#0e0b16] hover:-translate-y-0.5 active:translate-y-0.5 transition-all cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
             >
               <Package className="w-4 h-4 text-[#86efac]" />
               <div className="text-left">
-                <div className="font-pixel text-xs text-[#dcfce7]">Items [F]</div>
+                <div className="font-pixel text-xs text-[#dcfce7]">
+                  {battle.noConsumables ? 'Items Sealed' : 'Items [F]'}
+                </div>
                 <div className="text-[10px] font-mono-num text-[#86efac]">
-                  {consumables.reduce((acc, c) => acc + c.quantity, 0)} left
+                  {battle.noConsumables
+                    ? 'Arena Rule'
+                    : `${consumables.reduce((acc, c) => acc + c.quantity, 0)} left`}
                 </div>
               </div>
             </button>

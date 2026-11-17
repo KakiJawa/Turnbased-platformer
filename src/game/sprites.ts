@@ -23,6 +23,7 @@ export interface SpriteDrawOptions {
   facing?: 1 | -1;
   scale?: number;
   walkCycle?: number;
+  petLevel?: number;
 }
 
 let hitScratchCanvas: HTMLCanvasElement | null = null;
@@ -47,7 +48,8 @@ function drawSpriteShape(
   sprite: SpriteId,
   animState: ActorAnimState,
   time: number,
-  walkCycle: number
+  walkCycle: number,
+  petLevel = 1
 ) {
   switch (sprite) {
     case 'villager':
@@ -116,7 +118,7 @@ function drawSpriteShape(
     case 'pet_wisp':
     case 'pet_turtle':
     case 'pet_drake':
-      drawPetPixels(ctx, sprite, animState, time);
+      drawPetPixels(ctx, sprite, animState, time, petLevel);
       break;
   }
 }
@@ -134,6 +136,7 @@ export function drawActorSprite(
     facing = 1,
     scale = 1,
     walkCycle = 0,
+    petLevel = 1,
   } = opts;
 
   ctx.save();
@@ -189,7 +192,7 @@ export function drawActorSprite(
     sctx.setTransform(1, 0, 0, 1, 0, 0);
     sctx.clearRect(0, 0, sc.width, sc.height);
     sctx.translate(48, 80);
-    drawSpriteShape(sctx, sprite, animState, time, walkCycle);
+    drawSpriteShape(sctx, sprite, animState, time, walkCycle, petLevel);
     // Tint strictly the sprite's silhouette (never a background square!)
     sctx.globalCompositeOperation = 'source-atop';
     sctx.fillStyle =
@@ -202,7 +205,7 @@ export function drawActorSprite(
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(sc, -48, -80);
   } else {
-    drawSpriteShape(ctx, sprite, animState, time, walkCycle);
+    drawSpriteShape(ctx, sprite, animState, time, walkCycle, petLevel);
   }
 
   // Crisp 16-bit pixel slash cut & impact sparks across target when hit
@@ -766,52 +769,79 @@ function drawPetPixels(
   ctx: CanvasRenderingContext2D,
   sprite: 'pet_chick' | 'pet_pup' | 'pet_wisp' | 'pet_turtle' | 'pet_drake',
   anim: ActorAnimState,
-  time: number
+  time: number,
+  petLevel = 1
 ) {
   const hop = Math.abs(Math.sin(time * 7)) * -2;
+  const isAwakened = petLevel >= 3;
+  const isApex = petLevel >= 5;
+
   if (sprite === 'pet_chick') {
     pxRect(ctx, -3, -2, 2, 2, PALETTE.fireOrange);
     pxRect(ctx, 1, -2, 2, 2, PALETTE.fireOrange);
-    pxRect(ctx, -5, -10 + hop, 10, 8, '#fde047');
+    pxRect(ctx, -5, -10 + hop, 10, 8, isApex ? '#fb923c' : '#fde047');
+    if (isAwakened) {
+      pxRect(ctx, -2, -13 + hop, 4, 3, PALETTE.fireRed); // Blaze Comb
+      pxRect(ctx, -8, -9 + hop, 3, 4, '#f97316'); // Flame Tail
+    }
     pxRect(ctx, 5, -7 + hop, 3, 2, PALETTE.fireOrange);
-    pxRect(ctx, 2, -8 + hop, 2, 2, PALETTE.ink);
-    return;
-  }
-  if (sprite === 'pet_pup') {
+    pxRect(ctx, 2, -8 + hop, 2, 2, isApex ? '#ef4444' : PALETTE.ink);
+  } else if (sprite === 'pet_pup') {
     pxRect(ctx, -5, -3, 2, 3, '#64748b');
     pxRect(ctx, 3, -3, 2, 3, '#64748b');
-    pxRect(ctx, -7, -10 + hop, 14, 7, '#cbd5e1');
+    pxRect(ctx, -7, -10 + hop, 14, 7, isApex ? '#94a3b8' : '#cbd5e1');
+    if (isAwakened) {
+      pxRect(ctx, -4, -12 + hop, 7, 3, '#475569'); // Dire Mane
+      pxRect(ctx, -10, -11 + hop, 3, 3, '#f8fafc'); // Tail plume
+    }
     pxRect(ctx, 3, -14 + hop, 7, 6, '#e2e8f0');
-    pxRect(ctx, 4, -16 + hop, 2, 2, '#475569');
-    pxRect(ctx, 7, -12 + hop, 2, 2, PALETTE.ink);
-    return;
-  }
-  if (sprite === 'pet_wisp') {
+    pxRect(ctx, 4, -16 + hop, 2, 2, isApex ? '#facc15' : '#475569');
+    pxRect(ctx, 7, -12 + hop, 2, 2, isAwakened ? '#ef4444' : PALETTE.ink);
+  } else if (sprite === 'pet_wisp') {
     const floatY = Math.sin(time * 6) * 3 - 5;
-    pxRect(ctx, -5, -11 + floatY, 10, 10, '#f97316');
+    pxRect(ctx, -5, -11 + floatY, 10, 10, isApex ? '#38bdf8' : '#f97316');
     pxRect(ctx, -3, -14 + floatY, 6, 4, '#facc15');
-    pxRect(ctx, -3, -9 + floatY, 6, 6, '#fef08a');
+    pxRect(ctx, -3, -9 + floatY, 6, 6, isApex ? '#e0f2fe' : '#fef08a');
+    if (isAwakened) {
+      pxRect(ctx, -7, -8 + floatY, 2, 4, '#facc15'); // Radiant Wings
+      pxRect(ctx, 5, -8 + floatY, 2, 4, '#facc15');
+    }
     pxRect(ctx, -2, -7 + floatY, 2, 2, PALETTE.ink);
     pxRect(ctx, 1, -7 + floatY, 2, 2, PALETTE.ink);
-    return;
-  }
-  if (sprite === 'pet_turtle') {
+  } else if (sprite === 'pet_turtle') {
     pxRect(ctx, -6, -3, 3, 3, '#4ade80');
     pxRect(ctx, 3, -3, 3, 3, '#4ade80');
-    pxRect(ctx, -8, -11 + hop * 0.4, 15, 8, '#15803d');
-    pxRect(ctx, -6, -13 + hop * 0.4, 11, 4, '#4ade80');
+    pxRect(ctx, -8, -11 + hop * 0.4, 15, 8, isApex ? '#0f766e' : '#15803d');
+    pxRect(ctx, -6, -13 + hop * 0.4, 11, 4, isAwakened ? '#2dd4bf' : '#4ade80');
+    if (isAwakened) {
+      pxRect(ctx, -4, -15 + hop * 0.4, 2, 2, '#facc15'); // Jade Ridge Spikes
+      pxRect(ctx, 0, -15 + hop * 0.4, 2, 2, '#facc15');
+    }
     pxRect(ctx, 6, -9 + hop * 0.4, 5, 5, '#86efac');
     pxRect(ctx, 9, -8 + hop * 0.4, 2, 2, PALETTE.ink);
-    return;
+  } else {
+    // pet_drake
+    const flap = Math.sin(time * 9) * 2;
+    const floatY = Math.sin(time * 5) * 2 - 4;
+    pxRect(ctx, -9, -15 + flap + floatY, 6, 7, isApex ? '#7e22ce' : '#0284c7');
+    pxRect(ctx, -6, -11 + floatY, 12, 8, isApex ? '#a855f7' : '#38bdf8');
+    pxRect(ctx, 3, -16 + floatY, 7, 6, isApex ? '#e9d5ff' : '#7dd3fc');
+    pxRect(ctx, 3, -18 + floatY, 2, 2, '#facc15');
+    if (isAwakened) {
+      pxRect(ctx, 6, -19 + floatY, 2, 3, '#facc15'); // Second Crown Horn
+    }
+    pxRect(ctx, 7, -14 + floatY, 2, 2, anim === 'attack' || isApex ? '#f43f5e' : PALETTE.ink);
   }
-  // pet_drake
-  const flap = Math.sin(time * 9) * 2;
-  const floatY = Math.sin(time * 5) * 2 - 4;
-  pxRect(ctx, -9, -15 + flap + floatY, 6, 7, '#0284c7');
-  pxRect(ctx, -6, -11 + floatY, 12, 8, '#38bdf8');
-  pxRect(ctx, 3, -16 + floatY, 7, 6, '#7dd3fc');
-  pxRect(ctx, 3, -18 + floatY, 2, 2, '#facc15');
-  pxRect(ctx, 7, -14 + floatY, 2, 2, anim === 'attack' ? '#f43f5e' : PALETTE.ink);
+
+  // Apex Lv.5 orbiting starlight motes
+  if (isApex) {
+    const ox1 = Math.round(Math.cos(time * 4) * 10);
+    const oy1 = Math.round(-14 + Math.sin(time * 4) * 3);
+    const ox2 = Math.round(Math.cos(time * 4 + Math.PI) * 10);
+    const oy2 = Math.round(-14 + Math.sin(time * 4 + Math.PI) * 3);
+    pxRect(ctx, ox1 - 1, oy1 - 1, 2, 2, '#facc15');
+    pxRect(ctx, ox2 - 1, oy2 - 1, 2, 2, '#38bdf8');
+  }
 }
 
 // ================= INTERACTIVE STAGE PROPS & HAZARDS =================

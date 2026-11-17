@@ -1,4 +1,4 @@
-import { ArrowRight, Compass, Crown, Flame, RotateCcw, Skull, Sparkles } from 'lucide-react';
+import { ArrowRight, Compass, Crown, Flame, RotateCcw, Skull, Sparkles, Trophy } from 'lucide-react';
 import { MATERIAL_META } from '../game/data';
 import { RARITY_META } from '../game/palette';
 import { EquipmentItem, MaterialId, PlayerState } from '../game/types';
@@ -17,6 +17,8 @@ export interface VictoryRecapData {
   maxComboDamage: number;
   voidTowerFloor?: number;
   nextVoidTowerFloor?: number;
+  arenaMedal?: 'gold' | 'silver' | 'bronze';
+  arenaParTurns?: number;
 }
 
 interface BattleVictoryModalProps {
@@ -58,6 +60,29 @@ export function BattleVictoryModal({
           Defeated <span className="text-[#f4efe6] font-semibold">{recap.enemyName}</span> in{' '}
           <span className="font-mono-num text-[#f7c948]">{recap.turnCount} turns</span> (Zone {recap.zone}).
         </p>
+
+        {recap.arenaMedal && (
+          <div
+            data-testid="arena-medal-banner"
+            className={`mb-3 px-3 py-2 border-2 flex items-center justify-between text-xs font-pixel ${
+              recap.arenaMedal === 'gold'
+                ? 'bg-[#422006] border-[#facc15] text-[#fde047]'
+                : recap.arenaMedal === 'silver'
+                ? 'bg-[#1e293b] border-[#cbd5e1] text-[#f1f5f9]'
+                : 'bg-[#291711] border-[#c2410c] text-[#fdba74]'
+            }`}
+          >
+            <span className="inline-flex items-center gap-1.5">
+              <Trophy className="w-4 h-4" />
+              {recap.arenaMedal.toUpperCase()} MEDAL EARNED!
+            </span>
+            {recap.arenaParTurns && (
+              <span className="font-mono-num text-[11px]">
+                Par &le; {recap.arenaParTurns}t
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Combo & Loot Summary Grid */}
         <div className="grid grid-cols-2 gap-2 mb-3 text-xs font-mono-num">

@@ -21,8 +21,13 @@ import {
   Wind,
   Zap,
 } from 'lucide-react';
-import { PET_CATALOG } from '../game/data';
-import { computePlayerStats, getXpToNextLevel } from '../game/rpgLogic';
+import { getZoneSealProgress } from '../game/platformer';
+import {
+  computePlayerStats,
+  getPetEffectiveDefinition,
+  getPetLevel,
+  getXpToNextLevel,
+} from '../game/rpgLogic';
 import { PlayerState, StageDefinition, WorldEntity } from '../game/types';
 import { getWeatherCombatEffect, getZoneWeatherProfile } from '../game/weather';
 
@@ -73,12 +78,22 @@ export function ExploreHud({
   const mpPct = Math.max(0, Math.min(100, (player.currentMp / stats.mp) * 100));
   const xpPct = Math.max(0, Math.min(100, (player.xp / xpNeeded) * 100));
   const equippedPet = player.equippedPetId
-    ? PET_CATALOG.find((p) => p.id === player.equippedPetId)
+    ? getPetEffectiveDefinition(
+        player.equippedPetId,
+        getPetLevel(player, player.equippedPetId)
+      )
     : undefined;
+
+  const activeEnemies = stage.entities.filter((e) => e.kind === 'enemy' && !e.defeated);
+  const bossEntity = stage.entities.find((e) => e.kind === 'enemy' && e.enemyRarity === 'boss');
+  const bossDefeated = Boolean(bossEntity?.defeated);
+  const sealProgress = getZoneSealProgress(stage);
 
   const interactLabel =
     nearbyInteractable?.kind === 'fireplace'
-      ? 'Rest at Fireplace [E]'
+      ? stage.zone <= 2
+        ? 'Rest at Fireplace (Full) [E]'
+        : 'Camp Rest (65% Recovery) [E]'
       : nearbyInteractable?.kind === 'shop'
       ? 'Open Shop & Blacksmith [E]'
       : nearbyInteractable?.kind === 'chest'
@@ -86,12 +101,11 @@ export function ExploreHud({
       : nearbyInteractable?.kind === 'shrine'
       ? 'Activate Blessing Shrine [E]'
       : nearbyInteractable?.kind === 'portal'
-      ? 'Enter Next Zone [E]'
+      ? bossDefeated
+        ? 'Enter Next Zone [E]'
+        : 'Portal Sealed (Defeat Stage Boss)'
       : null;
 
-  const activeEnemies = stage.entities.filter((e) => e.kind === 'enemy' && !e.defeated);
-  const bossEntity = stage.entities.find((e) => e.kind === 'enemy' && e.enemyRarity === 'boss');
-  const bossDefeated = Boolean(bossEntity?.defeated);
   const nearbyThreat = activeEnemies.find(
     (e) =>
       (e.enemyRarity === 'boss' || e.enemyRarity === 'elite') &&
@@ -163,7 +177,7 @@ export function ExploreHud({
             <div className="mt-1.5 pt-1 border-t border-[#4b3f6b]/60 flex items-center justify-between text-[10px] font-mono-num">
               <span className="text-[#94a3b8]">Familiar:</span>
               <span className="font-semibold" style={{ color: equippedPet.accent }}>
-                {equippedPet.name} ({equippedPet.assistName})
+                {equippedPet.name} Lv.{equippedPet.level} ({equippedPet.assistName})
               </span>
             </div>
           )}
@@ -415,9 +429,20 @@ export function ExploreHud({
           <div className="flex items-center justify-between text-[10px] font-mono-num text-[#cbd5e1]">
             <span className="font-pixel text-[#f7c948]">STAGE MAP · Z{stage.zone}</span>
             <div className="flex items-center gap-3">
-              <span>Enemies: {activeEnemies.length}</span>
-              <span className={bossDefeated ? 'text-[#4ade80]' : 'text-[#fb7185]'}>
-                Boss: {bossDefeated ? 'Defeated' : 'Active'}
+              <span data-testid="guards-remaining-label">
+                Guards: {sealProgress.remaining}/{sealProgress.nonBossTotal}
+              </span>
+              <span
+                data-testid="boss-seal-status"
+                className={
+                  bossDefeated
+                    ? 'text-[#4ade80]'
+                    : sealProgress.sealed
+                    ? 'text-[#c084fc]'
+                    : 'text-[#fb7185]'
+                }
+              >
+                Boss: {bossDefeated ? 'Defeated' : sealProgress.sealed ? 'SEALED' : 'UNSEALED'}
               </span>
             </div>
           </div>

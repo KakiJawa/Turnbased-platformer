@@ -18,7 +18,12 @@ import {
 } from './rpgLogic';
 import { VOID_TOWER_MUTATORS } from './data';
 import { buildStage } from './stages';
-import { createPlatformerPlayer, stepPlatformer } from './platformer';
+import {
+  createPlatformerPlayer,
+  getZoneSealProgress,
+  isBossSealed,
+  stepPlatformer,
+} from './platformer';
 
 test('Stagger break reduces stagger to 0 and enters staggered state', () => {
   const player = createInitialPlayer();
@@ -562,4 +567,100 @@ test('Target-accurate VFX routes targetUid to flanking adds and Void Tower mutat
     voidTowerMutator: astralMutator,
   });
   assert.ok(overdriveBattle.comboCount >= 3);
+});
+
+test('Boss Arena Seal blocks Boss until non-boss guards are defeated; Z3+ removes mid-stage camp', () => {
+  const stage1 = buildStage(1);
+  const stage3 = buildStage(3);
+  assert.equal(stage1.entities.filter((e) => e.kind === 'fireplace').length, 2);
+  assert.equal(stage3.entities.filter((e) => e.kind === 'fireplace').length, 1);
+  assert.ok(stage1.entities.filter((e) => e.kind === 'enemy').length >= 5);
+  assert.ok(stage3.entities.filter((e) => e.kind === 'enemy').length >= 6);
+
+  const sealBefore = getZoneSealProgress(stage1);
+  assert.equal(sealBefore.sealed, true);
+  assert.ok(sealBefore.remaining >= 4);
+
+  const boss = stage1.entities.find((e) => e.kind === 'enemy' && e.enemyRarity === 'boss')!;
+  const p = createPlatformerPlayer();
+  p.x = boss.x;
+  p.y = boss.y;
+  const blockedRes = stepPlatformer(
+    p,
+    stage1,
+    { left: false, right: true, jumpJustPressed: false, jumpHeld: false },
+    0.016
+  );
+  assert.equal(blockedRes.triggeredEnemy, null);
+  assert.equal(blockedRes.sealedBoss?.id, boss.id);
+
+  // Defeat all guards -> boss unseals
+  for (const e of stage1.entities) {
+    if (e.kind === 'enemy' && e.enemyRarity !== 'boss') {
+      e.defeated = true;
+    }
+  }
+  assert.equal(isBossSealed(stage1), false);
+  p.x = boss.x;
+  p.y = boss.y;
+  const openRes = stepPlatformer(
+    p,
+    stage1,
+    { left: false, right: false, jumpJustPressed: false, jumpHeld: false },
+    0.016
+  );
+  assert.equal(openRes.triggeredEnemy?.id, boss.id);
+});
+
+test('Twinborn, Vampiric, Thorny, Hexed variants and Arena noConsumables rule execute accurately', () => {
+  const player = createInitialPlayer();
+  player.currentHp = 200;
+
+  // Twinborn spawns a Mirror Twin partner
+  const twinEnemy = spawnEnemyFromTemplate('orc_warrior', 0, 'twinborn');
+  const twinBattle = createBattleState(5, 'normal', 'z5_twin', [twinEnemy], {
+    noConsumables: true,
+  });
+  assert.equal(twinBattle.adds.length, 1);
+  assert.ok(twinBattle.adds[0].name.includes('Twin'));
+
+  // noConsumables blocks using potions in Arena trials
+  const ciderBefore = player.consumables.find((c) => c.id === 'potion_hp_sm')!.quantity;
+  executePlayerAction(twinBattle, player, {
+    kind: 'consumable',
+    itemId: 'potion_hp_sm',
+  });
+  assert.equal(player.consumables.find((c) => c.id === 'potion_hp_sm')!.quantity, ciderBefore);
+  assert.equal(twinBattle.phase, 'player_turn');
+  assert.ok(twinBattle.logs[0].text.toLowerCase().includes('sealed'));
+
+  // Thorny variant reflects non-lethal damage on melee attack
+  const thornyEnemy = spawnEnemyFromTemplate('orc_warrior', 0, 'thorny');
+  thornyEnemy.stats.hp = 5000;
+  thornyEnemy.currentHp = 5000;
+  thornyEnemy.stats.dodge = 0;
+  const thornBattle = createBattleState(5, 'normal', 'z5_thorn', [thornyEnemy]);
+  const hpBeforeThorn = player.currentHp;
+  const thornEv = executePlayerAction(thornBattle, player, { kind: 'attack' });
+  assert.ok(thornEv.vfx.some((v) => v.text.includes('THORNS')));
+  assert.ok(player.currentHp < hpBeforeThorn && player.currentHp >= 1);
+
+  // Vampiric enemy heals on damaging player
+  const vampEnemy = spawnEnemyFromTemplate('orc_warrior', 0, 'vampiric');
+  vampEnemy.currentHp = Math.round(vampEnemy.stats.hp * 0.5);
+  const vampHpBefore = vampEnemy.currentHp;
+  const vampBattle = createBattleState(5, 'normal', 'z5_vamp', [vampEnemy]);
+  vampBattle.phase = 'animating';
+  vampBattle.phaseTimer = 0.01;
+  vampBattle.pendingEnemyAction = 'basic';
+  vampBattle.pendingActorUid = vampEnemy.uid;
+  const origRand = Math.random;
+  Math.random = () => 0.99;
+  try {
+    const vampStep = stepBattleTimeline(vampBattle, { ...player, currentHp: 999 }, 0.05);
+    assert.ok(vampStep.vfx.some((v) => v.text.includes('LEECH')));
+    assert.ok(vampEnemy.currentHp > vampHpBefore);
+  } finally {
+    Math.random = origRand;
+  }
 });

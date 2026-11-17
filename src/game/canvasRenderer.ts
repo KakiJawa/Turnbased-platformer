@@ -1,7 +1,8 @@
 import { BattleState, getActiveEnemy } from './battleEngine';
-import { MATERIAL_META, PET_CATALOG } from './data';
+import { ENEMY_VARIANTS, MATERIAL_META, PET_CATALOG } from './data';
 import { PALETTE, RARITY_META } from './palette';
-import { PlatformerPlayer } from './platformer';
+import { isBossSealed, PlatformerPlayer } from './platformer';
+import { getPetLevel } from './rpgLogic';
 import {
   drawActorSprite,
   drawBouncePadSprite,
@@ -170,6 +171,7 @@ export function renderExploreFrame(
   const bossDefeated = stage.entities.some(
     (e) => e.kind === 'enemy' && e.enemyRarity === 'boss' && e.defeated
   );
+  const bossSealed = isBossSealed(stage);
 
   for (const ent of stage.entities) {
     if (ent.kind === 'fireplace') {
@@ -197,16 +199,51 @@ export function renderExploreFrame(
     } else if (ent.kind === 'shrine') {
       drawShrineSprite(ctx, ent.x, ent.y, Boolean(ent.used), time);
     } else if (ent.kind === 'portal') {
-      if (bossDefeated || stage.zone < 4) {
-        drawPortalSprite(ctx, ent.x, ent.y, time);
-        if (!bossDefeated) {
-          ctx.fillStyle = 'rgba(14,11,22,0.7)';
-          ctx.fillRect(ent.x - 12, ent.y - 34, 24, 34);
-        }
+      drawPortalSprite(ctx, ent.x, ent.y, time);
+      if (!bossDefeated) {
+        ctx.fillStyle = 'rgba(14,11,22,0.74)';
+        ctx.fillRect(ent.x - 12, ent.y - 34, 24, 34);
+        ctx.fillStyle = PALETTE.gold;
+        ctx.fillRect(ent.x - 4, ent.y - 20, 8, 7);
+        ctx.fillStyle = PALETTE.ink;
+        ctx.fillRect(ent.x - 1, ent.y - 18, 2, 3);
       }
     } else if (ent.kind === 'enemy' && !ent.defeated && ent.enemySprite) {
       const scale =
         ent.enemyRarity === 'boss' ? 1.4 : ent.enemyRarity === 'elite' ? 1.15 : 1;
+      const variantMeta =
+        ent.enemyVariant && ent.enemyVariant !== 'standard'
+          ? ENEMY_VARIANTS[ent.enemyVariant]
+          : null;
+
+      if (variantMeta) {
+        ctx.save();
+        ctx.strokeStyle = variantMeta.accent;
+        ctx.lineWidth = 1.5;
+        ctx.globalAlpha = 0.45 + Math.sin(time * 7) * 0.2;
+        ctx.strokeRect(
+          Math.round(ent.x - 14 * scale),
+          Math.round(ent.y - 34 * scale),
+          Math.round(28 * scale),
+          Math.round(34 * scale)
+        );
+        ctx.restore();
+      }
+
+      if (ent.enemyRarity === 'boss' && bossSealed) {
+        ctx.save();
+        ctx.strokeStyle = '#c084fc';
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = 0.5 + Math.sin(time * 6) * 0.25;
+        ctx.strokeRect(
+          Math.round(ent.x - 22),
+          Math.round(ent.y - 54),
+          44,
+          54
+        );
+        ctx.restore();
+      }
+
       drawActorSprite(ctx, {
         x: ent.x,
         y: ent.y,
@@ -216,19 +253,32 @@ export function renderExploreFrame(
         facing: ent.facing ?? -1,
         scale,
       });
-      if (ent.enemyRarity === 'elite' || ent.enemyRarity === 'boss') {
+
+      if (ent.enemyRarity === 'elite' || ent.enemyRarity === 'boss' || variantMeta) {
+        const tagText =
+          ent.enemyRarity === 'boss'
+            ? bossSealed
+              ? 'SEALED BOSS'
+              : 'BOSS'
+            : variantMeta
+            ? `${variantMeta.name.toUpperCase()}${ent.enemyRarity === 'elite' ? '★' : ''}`
+            : 'ELITE';
         const tagColor =
-          ent.enemyRarity === 'boss' ? PALETTE.crimson : PALETTE.gold;
+          ent.enemyRarity === 'boss'
+            ? bossSealed
+              ? '#c084fc'
+              : PALETTE.crimson
+            : variantMeta
+            ? variantMeta.accent
+            : PALETTE.gold;
+        const boxW = Math.max(34, tagText.length * 5 + 8);
+        const tagY = Math.round(ent.y - 46 * scale);
         ctx.fillStyle = PALETTE.ink;
-        ctx.fillRect(Math.round(ent.x - 16), Math.round(ent.y - 46 * scale), 32, 9);
+        ctx.fillRect(Math.round(ent.x - boxW / 2), tagY, boxW, 9);
         ctx.font = 'bold 7px "Silkscreen", monospace';
         ctx.textAlign = 'center';
         ctx.fillStyle = tagColor;
-        ctx.fillText(
-          ent.enemyRarity === 'boss' ? 'BOSS' : 'ELITE',
-          Math.round(ent.x),
-          Math.round(ent.y - 46 * scale + 7)
-        );
+        ctx.fillText(tagText, Math.round(ent.x), tagY + 7);
       }
     }
   }
@@ -237,6 +287,7 @@ export function renderExploreFrame(
   if (playerState.equippedPetId && !isTitlePreview) {
     const pet = PET_CATALOG.find((p) => p.id === playerState.equippedPetId);
     if (pet) {
+      const petLv = getPetLevel(playerState, pet.id);
       drawActorSprite(ctx, {
         x: pPlayer.petX,
         y: pPlayer.petY,
@@ -244,7 +295,8 @@ export function renderExploreFrame(
         animState: 'idle',
         time,
         facing: pPlayer.facing,
-        scale: 1,
+        scale: petLv >= 5 ? 1.18 : petLv >= 3 ? 1.08 : 1,
+        petLevel: petLv,
       });
     }
   }
@@ -282,7 +334,7 @@ function renderBattleEnemyActor(
     enemy.rarity === 'boss' ? 2.35 : enemy.rarity === 'elite' ? 2.15 : 2;
   const eScale = isPrimarySlot ? baseScale : Math.max(1.45, baseScale * 0.78);
 
-  // Enraged Crimson Aura around Phase 3 Boss
+  // Enraged or Variant Aura around Enemy
   if (enemy.enraged && enemy.currentHp > 0) {
     ctx.save();
     ctx.strokeStyle = '#f43f5e';
@@ -293,6 +345,18 @@ function renderBattleEnemyActor(
       Math.round(pos.y - 84),
       72,
       84
+    );
+    ctx.restore();
+  } else if (enemy.variantId && enemy.variantId !== 'standard' && enemy.currentHp > 0) {
+    ctx.save();
+    ctx.strokeStyle = enemy.variantAccent ?? '#facc15';
+    ctx.lineWidth = 1.5;
+    ctx.globalAlpha = 0.42 + Math.sin(time * 7) * 0.2;
+    ctx.strokeRect(
+      Math.round(pos.x - 30),
+      Math.round(pos.y - 74),
+      60,
+      74
     );
     ctx.restore();
   }
@@ -335,6 +399,8 @@ function renderBattleEnemyActor(
   ctx.fillStyle =
     enemy.enraged
       ? '#f43f5e'
+      : enemy.variantId !== 'standard' && enemy.variantAccent
+      ? enemy.variantAccent
       : enemy.rarity === 'boss'
       ? '#fb7185'
       : enemy.rarity === 'elite'
@@ -463,6 +529,7 @@ export function renderBattleFrame(
   if (playerState.equippedPetId) {
     const pet = PET_CATALOG.find((p) => p.id === playerState.equippedPetId);
     if (pet) {
+      const petLv = getPetLevel(playerState, pet.id);
       drawActorSprite(ctx, {
         x: BATTLE_PET_POS.x,
         y: BATTLE_PET_POS.y,
@@ -470,7 +537,8 @@ export function renderBattleFrame(
         animState: battle.petTurnCounter === 0 && battle.turnCount > 1 ? 'attack' : 'idle',
         time,
         facing: 1,
-        scale: 1.55,
+        scale: petLv >= 5 ? 1.78 : petLv >= 3 ? 1.66 : 1.55,
+        petLevel: petLv,
       });
     }
   }

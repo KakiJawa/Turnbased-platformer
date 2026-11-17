@@ -1,4 +1,4 @@
-import { Check, Crown, Flame, Hammer, Heart, Lock, ShoppingBag, Sparkles, Swords, X } from 'lucide-react';
+import { Check, Crown, Flame, Hammer, Heart, Lock, ShoppingBag, Sparkles, Swords, Trophy, X } from 'lucide-react';
 import { useState } from 'react';
 import {
   ARENA_TRIALS,
@@ -11,8 +11,13 @@ import {
 import { RARITY_META } from '../game/palette';
 import {
   MAX_ENCHANT_LEVEL,
+  MAX_PET_LEVEL,
   getEnchantCost,
   getEquipmentEffectiveStats,
+  getFireplaceHealFraction,
+  getPetEffectiveDefinition,
+  getPetLevel,
+  getPetTrainCost,
   getReforgeCost,
   getVoidTowerMutator,
 } from '../game/rpgLogic';
@@ -22,6 +27,7 @@ export type TownTab = 'shop' | 'blacksmith' | 'pets' | 'arena' | 'tower';
 
 interface FireplaceTownModalProps {
   player: PlayerState;
+  zone?: number;
   initialTab?: TownTab;
   onClose: () => void;
   onRestAtFireplace: () => void;
@@ -32,12 +38,14 @@ interface FireplaceTownModalProps {
   onReforgeItem: (itemId: string, equippedSlot?: EquipmentSlot) => { ok: boolean; msg: string };
   onBuyPet: (petId: string) => { ok: boolean; msg: string };
   onEquipPet: (petId: string | null) => void;
+  onTrainPet?: (petId: string) => { ok: boolean; msg: string };
   onStartArenaTrial: (trialId: string) => void;
   onStartVoidTowerFloor: (floor: number) => void;
 }
 
 export function FireplaceTownModal({
   player,
+  zone = 1,
   initialTab = 'shop',
   onClose,
   onRestAtFireplace,
@@ -48,6 +56,7 @@ export function FireplaceTownModal({
   onReforgeItem,
   onBuyPet,
   onEquipPet,
+  onTrainPet,
   onStartArenaTrial,
   onStartVoidTowerFloor,
 }: FireplaceTownModalProps) {
@@ -87,12 +96,17 @@ export function FireplaceTownModal({
             <button
               type="button"
               onClick={() => {
+                const full = getFireplaceHealFraction(zone) >= 1;
                 onRestAtFireplace();
-                setFeedback('Rested by the warm Fireplace! HP, MP & Stagger fully restored.');
+                setFeedback(
+                  full
+                    ? 'Rested by the warm Fireplace! HP, MP & Stagger fully restored.'
+                    : `Camp Rest (Z${zone}): +65% Max HP/MP & full Stagger restored.`
+                );
               }}
               className="font-pixel text-xs px-3 py-1.5 bg-[#f28729] text-[#0e0b16] border border-[#0e0b16] hover:bg-[#fb923c] cursor-pointer"
             >
-              Rest &amp; Recover
+              {getFireplaceHealFraction(zone) >= 1 ? 'Rest & Recover (Full)' : 'Camp Rest (65%)'}
             </button>
             <button
               type="button"
@@ -107,68 +121,68 @@ export function FireplaceTownModal({
 
         {/* Tabs */}
         <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-2 bg-[#0e0b16]/75 border-b border-[#4b3f6b]">
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-1.5">
             <button
               type="button"
               onClick={() => setTab('shop')}
-              className={`flex items-center gap-1.5 font-pixel text-xs px-3.5 py-2 border cursor-pointer ${
+              className={`flex items-center gap-1.5 font-pixel text-[11px] px-2.5 py-1.5 border cursor-pointer whitespace-nowrap ${
                 tab === 'shop'
                   ? 'bg-[#f7c948] text-[#0e0b16] border-[#0e0b16]'
                   : 'bg-[#2d2544] text-[#e6d8bd] border-[#4b3f6b]'
               }`}
             >
-              <ShoppingBag className="w-4 h-4" />
+              <ShoppingBag className="w-3.5 h-3.5" />
               <span>Merchant Shop</span>
             </button>
             <button
               type="button"
               onClick={() => setTab('blacksmith')}
-              className={`flex items-center gap-1.5 font-pixel text-xs px-3.5 py-2 border cursor-pointer ${
+              className={`flex items-center gap-1.5 font-pixel text-[11px] px-2.5 py-1.5 border cursor-pointer whitespace-nowrap ${
                 tab === 'blacksmith'
                   ? 'bg-[#f28729] text-[#0e0b16] border-[#0e0b16]'
                   : 'bg-[#2d2544] text-[#e6d8bd] border-[#4b3f6b]'
               }`}
             >
-              <Hammer className="w-4 h-4" />
+              <Hammer className="w-3.5 h-3.5" />
               <span>Blacksmith Forge</span>
             </button>
             <button
               type="button"
               data-testid="tab-pets"
               onClick={() => setTab('pets')}
-              className={`flex items-center gap-1.5 font-pixel text-xs px-3.5 py-2 border cursor-pointer ${
+              className={`flex items-center gap-1.5 font-pixel text-[11px] px-2.5 py-1.5 border cursor-pointer whitespace-nowrap ${
                 tab === 'pets'
                   ? 'bg-[#4ade80] text-[#0e0b16] border-[#0e0b16]'
                   : 'bg-[#2d2544] text-[#e6d8bd] border-[#4b3f6b]'
               }`}
             >
-              <Heart className="w-4 h-4" />
+              <Heart className="w-3.5 h-3.5" />
               <span>Pet Familiars ({ownedPets.length}/{PET_CATALOG.length})</span>
             </button>
             <button
               type="button"
               data-testid="tab-arena"
               onClick={() => setTab('arena')}
-              className={`flex items-center gap-1.5 font-pixel text-xs px-3.5 py-2 border cursor-pointer ${
+              className={`flex items-center gap-1.5 font-pixel text-[11px] px-2.5 py-1.5 border cursor-pointer whitespace-nowrap ${
                 tab === 'arena'
                   ? 'bg-[#fb7185] text-[#0e0b16] border-[#0e0b16]'
                   : 'bg-[#2d2544] text-[#e6d8bd] border-[#4b3f6b]'
               }`}
             >
-              <Swords className="w-4 h-4" />
+              <Swords className="w-3.5 h-3.5" />
               <span>Boss Rush Arena</span>
             </button>
             <button
               type="button"
               data-testid="tab-tower"
               onClick={() => setTab('tower')}
-              className={`flex items-center gap-1.5 font-pixel text-xs px-3.5 py-2 border cursor-pointer ${
+              className={`flex items-center gap-1.5 font-pixel text-[11px] px-2.5 py-1.5 border cursor-pointer whitespace-nowrap ${
                 tab === 'tower'
                   ? 'bg-[#c084fc] text-[#0e0b16] border-[#0e0b16]'
                   : 'bg-[#2d2544] text-[#e9d5ff] border-[#7e22ce]'
               }`}
             >
-              <Crown className="w-4 h-4" />
+              <Crown className="w-3.5 h-3.5" />
               <span>Void Tower {player.voidTowerUnlocked ? `(Best F${bestFloor})` : '(Locked)'}</span>
             </button>
           </div>
@@ -375,6 +389,21 @@ export function FireplaceTownModal({
               {PET_CATALOG.map((pet) => {
                 const owned = ownedPets.includes(pet.id);
                 const equipped = player.equippedPetId === pet.id;
+                const petLv = owned ? getPetLevel(player, pet.id) : 1;
+                const effPet = getPetEffectiveDefinition(pet.id, petLv) ?? {
+                  ...pet,
+                  level: 1,
+                  evoTitle: 'Base',
+                  evolutionStage: 1 as const,
+                };
+                const trainCost = getPetTrainCost(pet.id, petLv);
+                const nextEvo = pet.evolutions.find((e) => e.minLevel > petLv);
+                const canTrain =
+                  owned &&
+                  petLv < MAX_PET_LEVEL &&
+                  player.gold >= trainCost.gold &&
+                  (player.materials[trainCost.materialId] ?? 0) >= trainCost.materialAmount;
+
                 return (
                   <div
                     key={pet.id}
@@ -383,16 +412,47 @@ export function FireplaceTownModal({
                   >
                     <div>
                       <div className="flex items-center justify-between gap-2">
-                        <span className="font-pixel text-sm" style={{ color: pet.accent }}>
-                          {pet.name}
-                        </span>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-pixel text-sm" style={{ color: pet.accent }}>
+                            {effPet.name}
+                          </span>
+                          {owned && (
+                            <span
+                              className={`font-pixel text-[9px] px-1.5 py-0.5 border ${
+                                effPet.evolutionStage === 3
+                                  ? 'bg-[#2e1065] text-[#facc15] border-[#facc15]'
+                                  : effPet.evolutionStage === 2
+                                  ? 'bg-[#172554] text-[#7dd3fc] border-[#38bdf8]'
+                                  : 'bg-[#1b162b] text-[#cbd5e1] border-[#4b3f6b]'
+                              }`}
+                            >
+                              {effPet.evoTitle} · Lv.{petLv}/{MAX_PET_LEVEL}
+                            </span>
+                          )}
+                        </div>
                         <span className="font-mono-num text-xs text-[#f7c948]">
-                          {owned ? (equipped ? 'ACTIVE FAMILIAR' : 'OWNED') : `${pet.price} Gold`}
+                          {owned ? (equipped ? 'ACTIVE' : 'OWNED') : `${pet.price} Gold`}
                         </span>
                       </div>
 
+                      {owned && (
+                        <div className="flex items-center gap-1 mt-1.5">
+                          {[1, 2, 3, 4, 5].map((lv) => (
+                            <span
+                              key={lv}
+                              className={`h-1.5 flex-1 border ${
+                                lv <= petLv
+                                  ? 'border-[#0e0b16]'
+                                  : 'bg-[#1b162b] border-[#4b3f6b]'
+                              }`}
+                              style={lv <= petLv ? { backgroundColor: pet.accent } : undefined}
+                            />
+                          ))}
+                        </div>
+                      )}
+
                       <div className="mt-1.5 flex flex-wrap gap-1.5 text-[11px] font-mono-num text-[#cbd5e1]">
-                        {Object.entries(pet.statBonus).map(([k, v]) => (
+                        {Object.entries(effPet.statBonus).map(([k, v]) => (
                           <span
                             key={k}
                             className="px-1.5 py-0.5 bg-[#1b162b] border border-[#4b3f6b]"
@@ -404,13 +464,20 @@ export function FireplaceTownModal({
 
                       <div className="mt-2 text-xs text-[#e6d8bd]">
                         <span className="font-semibold" style={{ color: pet.accent }}>
-                          {pet.assistName}:
+                          {effPet.assistName} ({effPet.assistEveryTurns}t):
                         </span>{' '}
-                        {pet.assistDesc}
+                        {effPet.assistDesc}
                       </div>
+
+                      {nextEvo && (
+                        <div className="mt-1 text-[10px] font-mono-num text-[#94a3b8]">
+                          Next Evolution at Lv.{nextEvo.minLevel}:{' '}
+                          <span className="text-[#fde047]">{nextEvo.formName}</span> ({nextEvo.assistName})
+                        </div>
+                      )}
                     </div>
 
-                    <div className="flex items-center justify-end gap-2">
+                    <div className="flex flex-wrap items-center justify-end gap-2">
                       {!owned ? (
                         <button
                           type="button"
@@ -425,23 +492,43 @@ export function FireplaceTownModal({
                           Adopt for {pet.price}G
                         </button>
                       ) : (
-                        <button
-                          type="button"
-                          data-testid={`equip-pet-${pet.id}`}
-                          onClick={() => {
-                            onEquipPet(equipped ? null : pet.id);
-                            setFeedback(
-                              equipped ? `Dismissed ${pet.name}.` : `Summoned ${pet.name} to follow you!`
-                            );
-                          }}
-                          className={`font-pixel text-xs px-4 py-1.5 border cursor-pointer ${
-                            equipped
-                              ? 'bg-[#2d2544] text-[#fca5a5] border-[#ef4444]'
-                              : 'bg-[#22c55e] text-[#0e0b16] border-[#0e0b16] hover:bg-[#4ade80]'
-                          }`}
-                        >
-                          {equipped ? 'Unequip' : 'Equip Familiar'}
-                        </button>
+                        <>
+                          {onTrainPet && (
+                            <button
+                              type="button"
+                              data-testid={`train-pet-${pet.id}`}
+                              disabled={!canTrain}
+                              onClick={() => {
+                                const res = onTrainPet(pet.id);
+                                setFeedback(res.msg);
+                              }}
+                              className="font-pixel text-[10px] px-3 py-1.5 bg-[#38bdf8] text-[#0e0b16] border border-[#0e0b16] hover:bg-[#7dd3fc] disabled:opacity-35 cursor-pointer"
+                            >
+                              {petLv >= MAX_PET_LEVEL
+                                ? 'Max Bond Lv.5'
+                                : `Train Bond (${trainCost.gold}G + ${trainCost.materialAmount} ${MATERIAL_META[trainCost.materialId].name})`}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            data-testid={`equip-pet-${pet.id}`}
+                            onClick={() => {
+                              onEquipPet(equipped ? null : pet.id);
+                              setFeedback(
+                                equipped
+                                  ? `Dismissed ${effPet.name}.`
+                                  : `Summoned ${effPet.name} to follow you!`
+                              );
+                            }}
+                            className={`font-pixel text-xs px-4 py-1.5 border cursor-pointer ${
+                              equipped
+                                ? 'bg-[#2d2544] text-[#fca5a5] border-[#ef4444]'
+                                : 'bg-[#22c55e] text-[#0e0b16] border-[#0e0b16] hover:bg-[#4ade80]'
+                            }`}
+                          >
+                            {equipped ? 'Unequip' : 'Equip Familiar'}
+                          </button>
+                        </>
                       )}
                     </div>
                   </div>
@@ -453,13 +540,22 @@ export function FireplaceTownModal({
           {tab === 'arena' && (
             <div className="flex flex-col gap-3" data-testid="arena-trials-list">
               <div className="text-xs text-[#cbd5e1] bg-[#0e0b16] border border-[#4b3f6b] px-3 py-2">
-                Challenge sequential Multi-Boss Gauntlets! You restore +25% HP &amp; MP between arena waves, and defeat safely returns you to camp without losing your run.
+                Challenge sequential Boss &amp; Variant Gauntlets! Beat the Par Turn limit to earn Gold Medals. Defeat returns you safely to camp without losing your run.
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 {ARENA_TRIALS.map((trial) => {
                   const unlocked = player.highestZone >= trial.minHighestZone;
                   const cleared = completedArenas.includes(trial.id);
+                  const bestTurns = player.arenaBestTurns?.[trial.id];
+                  const medal =
+                    bestTurns !== undefined
+                      ? bestTurns <= trial.parTurns
+                        ? 'GOLD'
+                        : bestTurns <= trial.parTurns + 4
+                        ? 'SILVER'
+                        : 'BRONZE'
+                      : null;
                   const rMeta = RARITY_META[trial.guaranteedRarity];
                   return (
                     <div
@@ -472,17 +568,45 @@ export function FireplaceTownModal({
                           <span className="font-pixel text-xs" style={{ color: rMeta.color }}>
                             {trial.name}
                           </span>
-                          {cleared && <Check className="w-4 h-4 text-[#4ade80] shrink-0" />}
+                          <div className="flex items-center gap-1 shrink-0">
+                            {medal && (
+                              <span
+                                className={`inline-flex items-center gap-0.5 font-pixel text-[9px] px-1.5 py-0.5 border ${
+                                  medal === 'GOLD'
+                                    ? 'bg-[#422006] text-[#fde047] border-[#facc15]'
+                                    : medal === 'SILVER'
+                                    ? 'bg-[#1e293b] text-[#e2e8f0] border-[#94a3b8]'
+                                    : 'bg-[#291711] text-[#fdba74] border-[#c2410c]'
+                                }`}
+                              >
+                                <Trophy className="w-2.5 h-2.5" />
+                                {medal}
+                              </span>
+                            )}
+                            {cleared && <Check className="w-4 h-4 text-[#4ade80] shrink-0" />}
+                          </div>
                         </div>
+
+                        {trial.ruleBadge && (
+                          <div className="mt-1 inline-block font-pixel text-[9px] px-1.5 py-0.5 bg-[#3d1221] text-[#fda4af] border border-[#fb7185]">
+                            {trial.ruleBadge}
+                          </div>
+                        )}
+
                         <p className="text-[11px] text-[#cbd5e1] mt-1 leading-snug">
                           {trial.subtitle}
                         </p>
                         <div className="mt-2 space-y-1 text-[11px] font-mono-num">
                           <div className="text-[#f7c948]">
                             Reward: +{trial.bonusGold}G · +{trial.bonusXp} XP
+                            {trial.bonusVoidEssence ? ` · +${trial.bonusVoidEssence} Void Essence` : ''}
                           </div>
                           <div style={{ color: rMeta.color }}>
                             Guaranteed: Lv.{trial.rewardZoneLevel} {rMeta.label} Gear
+                          </div>
+                          <div className="text-[#7dd3fc]">
+                            Par Gold: &le; {trial.parTurns} turns
+                            {bestTurns !== undefined ? ` (Best: ${bestTurns}t)` : ''}
                           </div>
                           {!unlocked && (
                             <div className="text-[#fb7185]">

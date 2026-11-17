@@ -1,8 +1,10 @@
-import { ENEMY_TEMPLATES, MATERIAL_META, PET_CATALOG, SKILL_TREE } from './data';
+import { ENEMY_TEMPLATES, ENEMY_VARIANTS, MATERIAL_META, SKILL_TREE } from './data';
 import {
   calculateDamage,
   computePlayerStats,
   generateEquipment,
+  getPetEffectiveDefinition,
+  getPetLevel,
   getSkillById,
   grantXp,
   rollRarityForEnemy,
@@ -60,6 +62,7 @@ export interface BattleState {
   encounterRarity: EnemyRarity;
   sourceEntityId: string;
   arenaTrialId?: string;
+  noConsumables?: boolean;
   voidTowerFloor?: number;
   voidTowerMutator?: VoidTowerMutator;
   wave: CombatEnemy[];
@@ -151,6 +154,7 @@ export function createBattleState(
     | string
     | {
         arenaTrialId?: string;
+        noConsumables?: boolean;
         initialCombo?: number;
         voidTowerFloor?: number;
         voidTowerMutator?: VoidTowerMutator;
@@ -186,7 +190,7 @@ export function createBattleState(
   if (!opts.arenaTrialId && !opts.voidTowerFloor && first) {
     const tpl = ENEMY_TEMPLATES.find((t) => t.id === first.templateId);
     if (tpl?.dualPartnerId) {
-      const partner = spawnEnemyFromTemplate(tpl.dualPartnerId);
+      const partner = spawnEnemyFromTemplate(tpl.dualPartnerId, 0, 'standard', 0.35);
       partner.isAdd = true;
       adds.push(partner);
       logs.unshift({
@@ -198,9 +202,30 @@ export function createBattleState(
     }
   }
 
+  // Twinborn variant spawns a synchronized twin companion
+  if (first?.variantId === 'twinborn' && adds.length < 2) {
+    const twin = spawnEnemyFromTemplate(
+      first.templateId,
+      Math.max(0, Math.floor((first.level - first.zone * 5) / 2)),
+      'standard',
+      0.35
+    );
+    twin.name = `Twin ${twin.name}`;
+    twin.stats.hp = Math.round(first.stats.hp * 0.78);
+    twin.currentHp = twin.stats.hp;
+    twin.isAdd = true;
+    adds.push(twin);
+    logs.unshift({
+      id: logSeq++,
+      turn: 1,
+      text: `Twinborn Variant: ${twin.name} joins the fray!`,
+      tone: 'enemy',
+    });
+  }
+
   // Endless Void Tower Mirror Rift mutator spawns an extra Rift Stalker phantom
   if (mutator?.id === 'mirror_rift') {
-    const phantom = spawnEnemyFromTemplate('void_stalker', 2 + (opts.voidTowerFloor ?? 1));
+    const phantom = spawnEnemyFromTemplate('void_stalker', 2 + (opts.voidTowerFloor ?? 1), 'standard', 0.35);
     phantom.name = `Phantom ${phantom.name}`;
     phantom.isAdd = true;
     adds.push(phantom);
@@ -227,6 +252,7 @@ export function createBattleState(
     encounterRarity,
     sourceEntityId,
     arenaTrialId: opts.arenaTrialId,
+    noConsumables: opts.noConsumables,
     voidTowerFloor: opts.voidTowerFloor,
     voidTowerMutator: mutator,
     wave,
@@ -517,7 +543,8 @@ export function checkBossPhaseTransition(
   // Phase 2 at <= 55% HP: Barrier + ATK boost + optional Summon
   if (enemy.bossPhase === 1 && hpRatio <= 0.55) {
     enemy.bossPhase = 2;
-    enemy.shieldHits = 2;
+    const barrierHits = enemy.zone >= 6 ? 4 : 3;
+    enemy.shieldHits = Math.max(enemy.shieldHits, barrierHits);
     enemy.buffs = applyBuffToList(enemy.buffs, {
       type: 'atk_up',
       label: 'Phase 2 Fury',
@@ -540,7 +567,7 @@ export function checkBossPhaseTransition(
     });
     addBattleLog(
       battle,
-      `${enemy.name} enters Phase 2! Gained 2-hit Barrier & +20% ATK!`,
+      `${enemy.name} enters Phase 2! Gained ${barrierHits}-hit Barrier & +20% ATK!`,
       'enemy'
     );
 
@@ -549,7 +576,7 @@ export function checkBossPhaseTransition(
       !enemy.summonedOnce &&
       battle.adds.filter((a) => a.currentHp > 0).length < 2
     ) {
-      const add = spawnEnemyFromTemplate(enemy.summonTemplateId);
+      const add = spawnEnemyFromTemplate(enemy.summonTemplateId, 0, 'standard', 0.35);
       add.isAdd = true;
       enemy.summonedOnce = true;
       battle.adds.push(add);
@@ -566,7 +593,7 @@ export function checkBossPhaseTransition(
     }
   }
 
-  // Phase 3 Enrage at <= 28% HP
+  // Phase 3 Enrage at <= 28% HP (Z8+ bosses also refresh a 2-hit Barrier)
   if (enemy.bossPhase < 3 && hpRatio <= 0.28) {
     enemy.bossPhase = 3;
     enemy.enraged = true;
@@ -575,6 +602,9 @@ export function checkBossPhaseTransition(
     }
     enemy.specialMult = Math.round(enemy.specialMult * 1.2 * 100) / 100;
     enemy.ultimateCharge = Math.min(100, enemy.ultimateCharge + 50);
+    if (enemy.zone >= 8) {
+      enemy.shieldHits = Math.max(enemy.shieldHits, 2);
+    }
     enemy.buffs = applyBuffToList(enemy.buffs, {
       type: 'atk_up',
       label: 'ENRAGED',
@@ -593,7 +623,7 @@ export function checkBossPhaseTransition(
     events.vfx.push({
       target: 'enemy',
       targetUid: enemy.uid,
-      text: 'ENRAGED!!',
+      text: enemy.zone >= 8 ? 'ENRAGED · BARRIER!' : 'ENRAGED!!',
       color: '#f43f5e',
       yOffset: -44,
       burstColor: '#f43f5e',
@@ -605,7 +635,7 @@ export function checkBossPhaseTransition(
     });
     addBattleLog(
       battle,
-      `${enemy.name} is ENRAGED! (+35% ATK/MATK, ${enemy.specialName})`,
+      `${enemy.name} is ENRAGED! (+35% ATK/MATK${enemy.zone >= 8 ? ', 2-hit Barrier' : ''}, ${enemy.specialName})`,
       'enemy'
     );
   }
@@ -688,6 +718,10 @@ export function executePlayerAction(
   }
 
   if (action.kind === 'consumable') {
+    if (battle.noConsumables) {
+      addBattleLog(battle, 'Arena Rule: Consumable items are sealed in this trial!', 'enemy');
+      return events;
+    }
     const item = player.consumables.find((c) => c.id === action.itemId);
     if (!item || item.quantity <= 0) return events;
     item.quantity -= 1;
@@ -855,6 +889,14 @@ export function executePlayerAction(
         'crit'
       );
       applyPassiveProcsOnHit(battle, player, pStats, res, events);
+      if (enemy.variantId === 'thorny' && res.damage > 0 && player.currentHp > 1) {
+        const reflectDmg = Math.max(2, Math.round(res.damage * 0.12));
+        const applied = Math.min(player.currentHp - 1, reflectDmg);
+        if (applied > 0) {
+          player.currentHp -= applied;
+          events.vfx.push({ target: 'player', text: `THORNS -${applied}`, color: '#4ade80', yOffset: -12 });
+        }
+      }
       if (enemy.currentHp > 0) {
         dealStaggerToEnemy(battle, enemy, res.staggerDamage, events);
         checkBossPhaseTransition(battle, enemy, events);
@@ -900,6 +942,14 @@ export function executePlayerAction(
       'stagger'
     );
     applyPassiveProcsOnHit(battle, player, pStats, res, events);
+    if (enemy.variantId === 'thorny' && res.damage > 0 && player.currentHp > 1) {
+      const reflectDmg = Math.max(2, Math.round(res.damage * 0.12));
+      const applied = Math.min(player.currentHp - 1, reflectDmg);
+      if (applied > 0) {
+        player.currentHp -= applied;
+        events.vfx.push({ target: 'player', text: `THORNS -${applied}`, color: '#4ade80', yOffset: -12 });
+      }
+    }
     if (enemy.currentHp > 0) {
       dealStaggerToEnemy(battle, enemy, Math.max(1, enemy.currentStagger), events);
       checkBossPhaseTransition(battle, enemy, events);
@@ -1341,6 +1391,22 @@ function applyPlayerDamageResult(
   const pStats = getEffectivePlayerCombatStats(player, battle);
   applyPassiveProcsOnHit(battle, player, pStats, res, events);
 
+  // Thorny Enemy Variant reflects 12% of direct hit damage back onto the hero (non-lethal)
+  if (enemy.variantId === 'thorny' && res.damage > 0 && player.currentHp > 1) {
+    const reflectDmg = Math.max(2, Math.round(res.damage * 0.12));
+    const applied = Math.min(player.currentHp - 1, reflectDmg);
+    if (applied > 0) {
+      player.currentHp -= applied;
+      events.vfx.push({
+        target: 'player',
+        text: `THORNS -${applied}`,
+        color: '#4ade80',
+        yOffset: -12,
+      });
+      addBattleLog(battle, `${enemy.name}'s Thorns reflected ${applied} DMG back!`, 'enemy');
+    }
+  }
+
   if (enemy.currentHp > 0) {
     dealStaggerToEnemy(battle, enemy, res.staggerDamage, events);
     checkBossPhaseTransition(battle, enemy, events);
@@ -1353,7 +1419,8 @@ function executePetAssistIfReady(
   events: CombatActionEvents
 ) {
   if (!player.equippedPetId) return;
-  const pet = PET_CATALOG.find((p) => p.id === player.equippedPetId);
+  const petLv = getPetLevel(player, player.equippedPetId);
+  const pet = getPetEffectiveDefinition(player.equippedPetId, petLv);
   if (!pet) return;
 
   battle.petTurnCounter += 1;
@@ -1364,13 +1431,28 @@ function executePetAssistIfReady(
   if (pet.assistKind === 'heal_shield') {
     const healAmt = Math.max(8, Math.round((pStats.hp * pet.assistPower) / 100));
     player.currentHp = Math.min(pStats.hp, player.currentHp + healAmt);
+    const defPotency = petLv >= 5 ? 40 : petLv >= 3 ? 30 : 25;
     battle.playerBuffs = applyBuffToList(battle.playerBuffs, {
       type: 'def_up',
       label: pet.assistName,
       isDebuff: false,
       turns: 2,
-      potency: 25,
+      potency: defPotency,
     });
+    if (petLv >= 3) {
+      battle.playerBuffs = applyBuffToList(battle.playerBuffs, {
+        type: 'regen',
+        label: 'Jade Regen',
+        isDebuff: false,
+        turns: 2,
+        potency: petLv >= 5 ? 7 : 5,
+      });
+    }
+    let mpNote = '';
+    if (petLv >= 5) {
+      player.currentMp = Math.min(pStats.mp, player.currentMp + 15);
+      mpNote = ' & +15 MP';
+    }
     events.sfx.push('heal');
     events.vfx.push({
       target: 'player',
@@ -1381,7 +1463,7 @@ function executePetAssistIfReady(
     });
     addBattleLog(
       battle,
-      `${pet.name} cast ${pet.assistName}: +${healAmt} HP & +25% DEF!`,
+      `${pet.name} (Lv.${petLv}) cast ${pet.assistName}: +${healAmt} HP, +${defPotency}% DEF${petLv >= 3 ? ', Regen' : ''}${mpNote}!`,
       'heal'
     );
     return;
@@ -1398,51 +1480,124 @@ function executePetAssistIfReady(
   const res = calculateDamage(attacker, eStats, {
     damageType: pet.assistKind === 'magical_burn' ? 'magical' : 'physical',
     powerMult: pet.assistPower,
-    staggerPower: pet.assistKind === 'hybrid_ult' ? 26 : 14,
+    staggerPower: (pet.assistKind === 'hybrid_ult' ? 26 : 14) + (petLv - 1) * 3,
     defenderIsStaggered: target.staggeredTurns > 0,
+    forceCrit: pet.id === 'pet_pup' && petLv >= 5,
     allowDodge: false,
   });
 
   target.currentHp = Math.max(0, target.currentHp - res.damage);
   target.animState = target.currentHp === 0 ? 'death' : 'hit';
   target.animTimer = target.currentHp === 0 ? 0.65 : 0.3;
-  battle.comboCount += 1;
+  const bonusPetCombo = pet.id === 'pet_pup' && petLv >= 5 ? 2 : 1;
+  battle.comboCount += bonusPetCombo;
   battle.comboDamage += res.damage;
   battle.comboFlashSeq += 1;
   battle.maxComboCount = Math.max(battle.maxComboCount, battle.comboCount);
   battle.maxComboDamage = Math.max(battle.maxComboDamage, battle.comboDamage);
 
-  if (pet.assistKind === 'magical_burn' && target.currentHp > 0) {
+  // Evolved Lv.3 & Lv.5 pet combat perks
+  if (
+    (pet.assistKind === 'magical_burn' || (pet.id === 'pet_chick' && petLv >= 3)) &&
+    target.currentHp > 0
+  ) {
     target.buffs = applyBuffToList(target.buffs, {
       type: 'burn',
-      label: 'Cinder Burn',
+      label: petLv >= 3 ? 'Solar Burn' : 'Cinder Burn',
       isDebuff: true,
       turns: 2,
-      potency: 14,
+      potency: petLv >= 3 ? 18 : 14,
+    });
+  }
+  if (
+    ((pet.id === 'pet_pup' && petLv >= 3) || (pet.id === 'pet_drake' && petLv >= 5)) &&
+    target.currentHp > 0
+  ) {
+    target.buffs = applyBuffToList(target.buffs, {
+      type: 'armor_break',
+      label: pet.assistName,
+      isDebuff: true,
+      turns: 2,
+      potency: 20,
+    });
+  }
+  if (pet.id === 'pet_wisp' && petLv >= 3) {
+    const mpRestore = petLv >= 5 ? 14 : 8;
+    player.currentMp = Math.min(pStats.mp, player.currentMp + mpRestore);
+    events.vfx.push({
+      target: 'player',
+      text: `+${mpRestore} MP`,
+      color: '#38bdf8',
+      yOffset: -22,
     });
   }
   if (pet.assistKind === 'hybrid_ult') {
+    const ultGain = petLv >= 5 ? 20 : petLv >= 3 ? 15 : 10;
+    player.ultimateCharge = Math.min(100, player.ultimateCharge + ultGain);
+  } else if (pet.id === 'pet_chick' && petLv >= 5) {
     player.ultimateCharge = Math.min(100, player.ultimateCharge + 10);
   }
 
-  events.sfx.push('hit', 'comboUp');
+  events.sfx.push(res.isCrit ? 'crit' : 'hit', 'comboUp');
   events.vfx.push({
     target: 'enemy',
     targetUid: target.uid,
-    text: `${pet.name.toUpperCase()} -${res.damage}`,
+    text: `${pet.name.toUpperCase()} -${res.damage}${res.isCrit ? '!' : ''}`,
     color: pet.accent,
     yOffset: -24,
     burstColor: pet.accent,
-    burstCount: 10,
+    burstCount: petLv >= 3 ? 14 : 10,
   });
   addBattleLog(
     battle,
-    `${pet.name} assisted with ${pet.assistName} for ${res.damage} DMG!`,
-    'hit'
+    `${pet.name} (Lv.${petLv}) assisted with ${pet.assistName} for ${res.damage} DMG${res.isCrit ? ' CRIT' : ''}!`,
+    res.isCrit ? 'crit' : 'hit'
   );
   if (target.currentHp > 0) {
     dealStaggerToEnemy(battle, target, res.staggerDamage, events);
     checkBossPhaseTransition(battle, target, events);
+  }
+
+  // Evolved AoE splash on Lv.5 Wisp and Lv.3+/Lv.5 Drake
+  const splashRatio =
+    pet.id === 'pet_drake'
+      ? petLv >= 5
+        ? 1.0
+        : petLv >= 3
+        ? 0.5
+        : 0
+      : pet.id === 'pet_wisp' && petLv >= 5
+      ? 0.65
+      : 0;
+  if (splashRatio > 0) {
+    for (const flank of getLivingFieldEnemies(battle)) {
+      if (flank.uid === target.uid) continue;
+      const splashDmg = Math.max(4, Math.round(res.damage * splashRatio));
+      flank.currentHp = Math.max(0, flank.currentHp - splashDmg);
+      flank.animState = flank.currentHp === 0 ? 'death' : 'hit';
+      flank.animTimer = 0.3;
+      if (pet.id === 'pet_wisp' && flank.currentHp > 0) {
+        flank.buffs = applyBuffToList(flank.buffs, {
+          type: 'burn',
+          label: 'Solar Burn',
+          isDebuff: true,
+          turns: 2,
+          potency: 18,
+        });
+      }
+      events.vfx.push({
+        target: 'enemy',
+        targetUid: flank.uid,
+        text: `AOE -${splashDmg}`,
+        color: pet.accent,
+        yOffset: -14,
+        burstColor: pet.accent,
+        burstCount: 8,
+      });
+      if (flank.currentHp > 0) {
+        checkBossPhaseTransition(battle, flank, events);
+      }
+    }
   }
 }
 
@@ -1543,7 +1698,7 @@ function grantEnemyDefeatRewards(
   }
 
   const dropChance =
-    enemy.rarity === 'boss' ? 1.0 : enemy.rarity === 'elite' ? 0.55 : 0.28;
+    enemy.rarity === 'boss' ? 1.0 : enemy.rarity === 'elite' ? 0.45 : 0.2;
   if (Math.random() < dropChance) {
     const slots: EquipmentSlot[] = ['weapon', 'armor', 'helm', 'charm'];
     const slot = slots[Math.floor(Math.random() * slots.length)];
@@ -1645,11 +1800,21 @@ export function stepBattleTimeline(
     } else if (nextEnemy) {
       const tpl = ENEMY_TEMPLATES.find((t) => t.id === nextEnemy.templateId);
       if (tpl?.dualPartnerId) {
-        const partner = spawnEnemyFromTemplate(tpl.dualPartnerId);
+        const partner = spawnEnemyFromTemplate(tpl.dualPartnerId, 0, 'standard', 0.35);
         partner.isAdd = true;
         battle.adds.push(partner);
         addBattleLog(battle, `${partner.name} joins ${nextEnemy.name}!`, 'enemy');
       }
+    }
+
+    if (nextEnemy?.variantId === 'twinborn' && battle.adds.length < 2) {
+      const twin = spawnEnemyFromTemplate(nextEnemy.templateId, 0, 'standard', 0.35);
+      twin.name = `Twin ${twin.name}`;
+      twin.stats.hp = Math.round(nextEnemy.stats.hp * 0.78);
+      twin.currentHp = twin.stats.hp;
+      twin.isAdd = true;
+      battle.adds.push(twin);
+      addBattleLog(battle, `Twinborn Variant: ${twin.name} flanks alongside ${nextEnemy.name}!`, 'enemy');
     }
 
     addBattleLog(
@@ -1736,7 +1901,7 @@ function executeEnemyTurn(
     !enemy.summonedOnce &&
     battle.adds.filter((a) => a.currentHp > 0).length === 0
   ) {
-    const add = spawnEnemyFromTemplate(enemy.summonTemplateId);
+    const add = spawnEnemyFromTemplate(enemy.summonTemplateId, 0, 'standard', 0.35);
     add.isAdd = true;
     enemy.summonedOnce = true;
     battle.adds.push(add);
@@ -1775,13 +1940,14 @@ function executeEnemyTurn(
       damageMult: enemyFireMult,
       allowDodge: false,
     });
+    const swiftBonus = ENEMY_VARIANTS[enemy.variantId]?.qteSpeedBonus ?? 0;
     battle.phase = 'qte_dodge';
     battle.qte = {
       active: true,
       phase: 'dodge',
       promptLabel: `DODGE ${enemy.specialName.toUpperCase()}!`,
       cursor: 0.05,
-      speed: 1.55 + battle.zone * 0.11 + (enemy.enraged ? 0.2 : 0),
+      speed: 1.55 + battle.zone * 0.11 + (enemy.enraged ? 0.2 : 0) + swiftBonus,
       direction: 1,
       zoneStart: 0.36,
       zoneEnd: 0.64,
@@ -2073,6 +2239,46 @@ function applyDamageToPlayer(
     burstCount: res.isBlocked ? 5 : 12,
     trauma: res.isBlocked ? 0.15 : 0.38,
   });
+
+  // Vampiric enemy variant leeches 30% of unblocked hit damage dealt
+  if (attacker.variantId === 'vampiric' && !res.isBlocked && res.damage > 0 && attacker.currentHp > 0) {
+    const leechAmt = Math.max(3, Math.round(res.damage * 0.3));
+    attacker.currentHp = Math.min(attacker.stats.hp, attacker.currentHp + leechAmt);
+    events.vfx.push({
+      target: 'enemy',
+      targetUid: attacker.uid,
+      text: `+${leechAmt} LEECH`,
+      color: '#f43f5e',
+      yOffset: -20,
+    });
+    addBattleLog(battle, `${attackerName} drained +${leechAmt} HP via Vampiric Leech!`, 'enemy');
+  }
+
+  // Hexed enemy variant inflicts Weaken or Armor Break on player
+  if (attacker.variantId === 'hexed' && attacker.currentHp > 0 && player.currentHp > 0) {
+    const procChance = moveName !== 'Attack' ? 1.0 : 0.45;
+    if (Math.random() < procChance) {
+      const inflictBreak = Math.random() < 0.5;
+      battle.playerBuffs = applyBuffToList(battle.playerBuffs, {
+        type: inflictBreak ? 'armor_break' : 'weaken',
+        label: inflictBreak ? 'Hexed Shatter' : 'Hexed Curse',
+        isDebuff: true,
+        turns: 2,
+        potency: 20,
+      });
+      events.vfx.push({
+        target: 'player',
+        text: inflictBreak ? 'ARMOR BREAK!' : 'WEAKENED!',
+        color: '#c084fc',
+        yOffset: -26,
+      });
+      addBattleLog(
+        battle,
+        `${attackerName}'s Hex inflicted ${inflictBreak ? 'Armor Break (-20% DEF)' : 'Weaken (-20% ATK)'}!`,
+        'enemy'
+      );
+    }
+  }
 
   if (!res.isBlocked && battle.comboCount > 0) {
     const brokenHits = battle.comboCount;

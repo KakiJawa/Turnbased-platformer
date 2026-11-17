@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   MAX_EQUIPPED_SKILLS,
+  MAX_PET_LEVEL,
   MAX_TIER1_LEVEL,
   TIER3_UNLOCK_HERO_LEVEL,
   advanceToHeroClass,
@@ -17,6 +18,8 @@ import {
   enchantEquipment,
   equipPetFamiliar,
   generateEquipment,
+  getPetEffectiveDefinition,
+  getPetLevel,
   getRespecCost,
   getTotalCharacterLevel,
   getVoidTowerMutator,
@@ -25,16 +28,20 @@ import {
   loadSkillPreset,
   reforgeEquipment,
   respecSkills,
+  restAtFireplace,
   rollRarityForEnemy,
   saveSkillPreset,
   spawnArenaBossWave,
+  spawnEnemyFromTemplate,
   spawnEnemyWave,
   spawnVoidTowerWave,
   toggleEquipSkill,
   toggleEquipmentLock,
+  trainPetFamiliar,
   unlockSkillNode,
 } from './rpgLogic';
-import { ARENA_TRIALS, PET_CATALOG, SKILL_TREE } from './data';
+import { ARENA_TRIALS, ENEMY_VARIANTS, PET_CATALOG, SKILL_TREE } from './data';
+import { EnemyVariantId } from './types';
 
 test('Villager starts at Lv.1, advances to Hero at Lv.20 with steeper XP and higher growth', () => {
   let p = createInitialPlayer();
@@ -366,4 +373,129 @@ test('Equipment locking protects items from bulk sell/salvage and Void Tower sca
   const mut1 = getVoidTowerMutator(1);
   const mut2 = getVoidTowerMutator(2);
   assert.notEqual(mut1.id, mut2.id);
+});
+
+test('Pet Bond Training evolves Lv.1 -> Lv.3 Awakened -> Lv.5 Apex with stronger stats & shorter CD', () => {
+  let p = createInitialPlayer();
+  p.gold = 25000;
+  p.materials = {
+    feather: 50,
+    hide: 50,
+    ironShard: 50,
+    orcFang: 50,
+    dragonScale: 50,
+    starlightOre: 50,
+    voidEssence: 50,
+  };
+  p = buyPetFamiliar(p, 'pet_chick').player;
+  assert.equal(getPetLevel(p, 'pet_chick'), 1);
+
+  const eff1 = getPetEffectiveDefinition('pet_chick', 1)!;
+  assert.equal(eff1.evolutionStage, 1);
+  assert.equal(eff1.assistEveryTurns, 3);
+  const statsLv1 = computePlayerStats(p);
+
+  // Train Lv.1 -> Lv.2 -> Lv.3 (Awakened evolution)
+  let t = trainPetFamiliar(p, 'pet_chick');
+  assert.equal(t.success, true);
+  assert.equal(t.newLevel, 2);
+  assert.equal(t.evolved, false);
+
+  t = trainPetFamiliar(t.player, 'pet_chick');
+  assert.equal(t.success, true);
+  assert.equal(t.newLevel, 3);
+  assert.equal(t.evolved, true);
+  const eff3 = getPetEffectiveDefinition('pet_chick', 3)!;
+  assert.equal(eff3.evolutionStage, 2);
+  assert.notEqual(eff3.name, eff1.name);
+
+  // Train Lv.3 -> Lv.4 -> Lv.5 (Apex evolution reduces 3t -> 2t CD!)
+  t = trainPetFamiliar(t.player, 'pet_chick');
+  t = trainPetFamiliar(t.player, 'pet_chick');
+  assert.equal(t.newLevel, MAX_PET_LEVEL);
+  assert.equal(t.evolved, true);
+  const eff5 = getPetEffectiveDefinition('pet_chick', 5)!;
+  assert.equal(eff5.evolutionStage, 3);
+  assert.equal(eff5.assistEveryTurns, 2);
+
+  const statsLv5 = computePlayerStats(t.player);
+  assert.ok(statsLv5.hp > statsLv1.hp);
+  assert.ok(statsLv5.crit > statsLv1.crit);
+
+  // Capped at Lv.5
+  const capped = trainPetFamiliar(t.player, 'pet_chick');
+  assert.equal(capped.success, false);
+});
+
+test('All 9 non-elemental Enemy Variants mutate stats & rewards without elemental affinities', () => {
+  const variantIds: EnemyVariantId[] = [
+    'fierce',
+    'armored',
+    'swift',
+    'vampiric',
+    'hexed',
+    'colossal',
+    'thorny',
+    'twinborn',
+    'corrupted',
+  ];
+  const base = spawnEnemyFromTemplate('orc_warrior', 0, 'standard');
+  for (const vid of variantIds) {
+    const meta = ENEMY_VARIANTS[vid];
+    assert.ok(meta, `Missing variant meta for ${vid}`);
+    assert.equal('element' in meta, false);
+    const vEnemy = spawnEnemyFromTemplate('orc_warrior', 0, vid);
+    assert.equal(vEnemy.variantId, vid);
+    assert.ok(vEnemy.name.startsWith(meta.prefix));
+    assert.ok(vEnemy.xpReward >= base.xpReward);
+    if (vid === 'armored') {
+      assert.ok(vEnemy.stats.def > base.stats.def);
+      assert.ok(vEnemy.shieldHits >= 2);
+    } else if (vid === 'colossal') {
+      assert.ok(vEnemy.stats.hp > base.stats.hp * 1.4);
+      assert.ok(vEnemy.maxStagger > base.maxStagger * 1.3);
+    } else if (vid === 'swift') {
+      assert.ok(vEnemy.stats.speed > base.stats.speed);
+      assert.ok(vEnemy.stats.dodge > base.stats.dodge);
+    }
+  }
+});
+
+test('Part A: Expanded 7 Arena Trials, scaled Fireplace healing, +25% level-up heal, and diminishing wave XP', () => {
+  assert.ok(ARENA_TRIALS.length >= 7);
+  for (const t of ARENA_TRIALS) {
+    assert.ok(t.parTurns > 0);
+  }
+  const noPotTrial = ARENA_TRIALS.find((t) => t.id === 'arena_no_pot')!;
+  assert.equal(noPotTrial.noConsumables, true);
+  const noPotWave = spawnArenaBossWave(noPotTrial);
+  assert.equal(noPotWave.length, noPotTrial.bossTemplateIds.length);
+  assert.ok(noPotWave.some((e) => e.variantId !== 'standard'));
+
+  // Fireplace Z1-2 = 100% heal, Z3+ = 65% heal
+  const wounded = createInitialPlayer();
+  wounded.currentHp = 10;
+  wounded.currentMp = 0;
+  const z1Rest = restAtFireplace(wounded, 1);
+  assert.equal(z1Rest.fullHeal, true);
+  assert.equal(z1Rest.player.currentHp, computePlayerStats(wounded).hp);
+
+  const z4Rest = restAtFireplace(wounded, 4);
+  assert.equal(z4Rest.fullHeal, false);
+  assert.ok(z4Rest.player.currentHp < computePlayerStats(wounded).hp);
+  assert.ok(z4Rest.player.currentHp > 10);
+
+  // Level-up heals +25% Max HP instead of 100%
+  const lowHero = createInitialPlayer();
+  lowHero.currentHp = 10;
+  const lvlRes = grantXp(lowHero, getXpToNextLevel(1, 1));
+  assert.equal(lvlRes.levelsGained, 1);
+  const maxAfterLvl = computePlayerStats(lvlRes.player).hp;
+  assert.ok(lvlRes.player.currentHp < maxAfterLvl, 'Level up should not full heal to 100%');
+  assert.ok(lvlRes.player.currentHp >= 10 + Math.round(maxAfterLvl * 0.2));
+
+  // Diminishing wave XP for secondary slots (55%)
+  const single = spawnEnemyFromTemplate('orc_warrior', 0, 'standard', 1);
+  const secondary = spawnEnemyFromTemplate('orc_warrior', 0, 'standard', 0.55);
+  assert.ok(secondary.xpReward < single.xpReward);
 });
